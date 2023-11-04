@@ -1,3 +1,4 @@
 .env
 .venv
 launch.json
+windguru.py
