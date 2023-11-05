@@ -23,6 +23,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 stations = {
+    "altenrhein": {
+        "url": "https://www.meteoswiss.admin.ch/product/output/measured-values/stationMeta/messnetz-automatisch/stationMeta.messnetz-automatisch.ARH.en.json",
+        "interval": 300,
+        "password": os.getenv("WINDSPEED_PASS_ALTENRHEIN"),
+    },
     "rohrspitz": {
         "url": "https://www.kite-connection.at/weatherstation/aktuell.htm",
         "interval": 300,
@@ -149,6 +154,46 @@ def crawl_data(station):
         latest["wind"] = data["FFAM"]["data"][0] * 1.943844
         latest["wind_direction"] = data["DD"]["data"][0]
         latest["gusts"] = data["FFX"]["data"][0] * 1.943844
+
+    elif station == "altenrhein":
+        base_url = "https://www.meteoswiss.admin.ch/product/output/measured-values/stationsTable/"
+        paths = {
+            "temperature": "messwerte-lufttemperatur-10min/stationsTable.messwerte-lufttemperatur-10min.en.json",
+            "humidity": "messwerte-luftfeuchtigkeit-10min/stationsTable.messwerte-luftfeuchtigkeit-10min.en.json",
+            "air_pressure": "messwerte-luftdruck-qfe-10min/stationsTable.messwerte-luftdruck-qfe-10min.en.json",
+            "rain": "messwerte-niederschlag-10min/stationsTable.messwerte-niederschlag-10min.en.json",
+            "wind": "messwerte-windgeschwindigkeit-kmh-10min/stationsTable.messwerte-windgeschwindigkeit-kmh-10min.en.json",
+            "gusts": "messwerte-wind-boeenspitze-kmh-10min/stationsTable.messwerte-wind-boeenspitze-kmh-10min.en.json",
+        }
+
+        data = {}
+
+        for key, path in paths.items():
+            response = requests.get(base_url + path)
+            res = response.json()
+            # Assuming `res` is the result of `response.json()` and contains the JSON data
+            station_id = "ARH"
+
+            # Iterate through the data to find the station with the ID 'ARH'
+            for station_data in res.get("stations", []):
+                if station_data.get("id") == station_id:
+                    current_data = station_data.get("current")
+                    data["date"] = current_data.get("date")
+                    data[key] = current_data.get("value")
+                    if key == "wind":
+                        data["wind_direction"] = current_data.get("wind_direction")
+                    break
+
+        latest["date"] = datetime.datetime.fromtimestamp(
+            float(data["date"]) / 1000
+        ).date()
+        latest["temperature"] = float(data["temperature"])
+        latest["humidity"] = float(data["humidity"])
+        latest["air_pressure"] = float(data["air_pressure"])
+        latest["rain"] = float(data["rain"])
+        latest["wind"] = float(data["wind"]) / 1.852
+        latest["wind_direction"] = float(data["wind_direction"])
+        latest["gusts"] = float(data["gusts"]) / 1.852
 
     return latest
 
