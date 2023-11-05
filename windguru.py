@@ -77,7 +77,7 @@ def crawl_data(station):
 
         table = soup.find("table", attrs={"border": "1"})
         rows = table.find_all("tr")
-        row = rows[0]
+        row = rows[1]
         cols = row.find_all("td")
 
         date_str = cols[0].text.strip()
