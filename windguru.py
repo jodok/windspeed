@@ -25,16 +25,23 @@ load_dotenv()
 stations = {
     "rohrspitz": {
         "url": "https://www.kite-connection.at/weatherstation/aktuell.htm",
-        "password": os.getenv('WINDSPEED_PASS_ROHRSPITZ'),
+        "interval": 300,
+        "password": os.getenv("WINDSPEED_PASS_ROHRSPITZ"),
     },
     "rohrspitz-zamg": {
         "url": "https://dataset.api.hub.geosphere.at/v1/station/current/tawes-v1-10min?station_ids=11299&parameters=DD,FFAM,FFX,P,RFAM,RR,TL",
-        "password": os.getenv('WINDSPEED_PASS_ROHRSPITZ_ZAMG'),
+        "interval": 600,
+        "password": os.getenv("WINDSPEED_PASS_ROHRSPITZ_ZAMG"),
+    },
+    "lindau-lsc": {
+        "url": "https://stations.meteo-services.com/wetterstation/gatewaytest.php?station_id=3816&uw=kmh&ut=C&lp=0",
+        "interval": 300,
+        "password": os.getenv("WINDSPEED_PASS_LINDAU_LSC"),
     },
     "kressbronn": {
         "url": "https://www.wetter-kressbronn.de/wetter/aktuell.htm",
-        "password": os.getenv('WINDSPEED_PASS_KRESSBRONN'),
-
+        "interval": 120,
+        "password": os.getenv("WINDSPEED_PASS_KRESSBRONN"),
     },
 }
 
@@ -61,71 +68,72 @@ def crawl_data(station):
     url = stations[station]["url"]
     response = requests.get(url)
 
-    latest = {}
+    latest = {
+        "interval": stations[station]["interval"],
+    }
 
     if station == "rohrspitz" or station == "kressbronn":
         soup = BeautifulSoup(response.text, "html.parser")
 
         table = soup.find("table", attrs={"border": "1"})
         rows = table.find_all("tr")
+        row = rows[0]
+        cols = row.find_all("td")
 
-        data = []
-        for row in rows[1:]:
-            cols = row.find_all("td")
+        date_str = cols[0].text.strip()
+        time_str = cols[1].text.strip()
+        temperature_str = cols[2].text.strip()
 
-            if station == "rohrspitz":
-                if len(cols) == 12:
-                    date_str = cols[0].text.strip()
-                    time_str = cols[1].text.strip()
-                    temperature_str = cols[2].text.strip()
-                    humidity_str = cols[3].text.strip()
-                    air_pressure_str = cols[4].text.strip()
-                    rain_str = cols[5].text.strip()
-                    wind_str = cols[6].text.strip()
-                    wind_direction_str = cols[8].text.strip()
-                    windgusts_str = cols[11].text.strip()
-                    data.append(
-                        {
-                            "interval": 300,
-                            "date": datetime.datetime.strptime(
-                                date_str + " " + time_str, "%d.%m.%Y %H:%M"
-                            ).date(),
-                            "temperature": extract_value(temperature_str),
-                            "humidity": extract_value(humidity_str),
-                            "air_pressure": extract_value(air_pressure_str),
-                            "rain": extract_value(rain_str),
-                            "wind": extract_kts(wind_str),
-                            "wind_direction": extract_value(wind_direction_str),
-                            "gusts": extract_kts(windgusts_str),
-                        }
-                    )
-            elif station == "kressbronn":
-                if len(cols) == 25:
-                    date_str = cols[0].text.strip()
-                    time_str = cols[1].text.strip()
-                    temperature_str = cols[2].text.strip()
-                    humidity_str = cols[8].text.strip()
-                    air_pressure_str = cols[14].text.strip()
-                    rain_str = cols[15].text.strip()
-                    wind_str = cols[16].text.strip()
-                    wind_direction_str = cols[18].text.strip()
-                    windgusts_str = cols[24].text.strip()
-                    data.append(
-                        {
-                            "interval": 120,
-                            "date": datetime.datetime.strptime(
-                                date_str + " " + time_str, "%d.%m.%Y %H:%M"
-                            ).date(),
-                            "temperature": extract_value(temperature_str),
-                            "humidity": extract_value(humidity_str),
-                            "air_pressure": extract_value(air_pressure_str),
-                            "rain": extract_value(rain_str),
-                            "wind": extract_kmh(wind_str) * 0.54,
-                            "wind_direction": extract_value(wind_direction_str),
-                            "gusts": extract_kmh(windgusts_str) * 0.54,
-                        }
-                    )
-        latest = data[0]
+        latest["date"] = datetime.datetime.strptime(
+            date_str + " " + time_str, "%d.%m.%Y %H:%M"
+        ).date()
+        latest["temperature"] = extract_value(temperature_str)
+
+        if station == "rohrspitz":
+            humidity_str = cols[3].text.strip()
+            air_pressure_str = cols[4].text.strip()
+            rain_str = cols[5].text.strip()
+            wind_str = cols[6].text.strip()
+            wind_direction_str = cols[8].text.strip()
+            windgusts_str = cols[11].text.strip()
+
+            latest["date"] = datetime.datetime.strptime(
+                date_str + " " + time_str, "%d.%m.%Y %H:%M"
+            ).date()
+            latest["wind"] = extract_kts(wind_str)
+            latest["gusts"] = extract_kts(windgusts_str)
+
+        elif station == "kressbronn":
+            humidity_str = cols[8].text.strip()
+            air_pressure_str = cols[14].text.strip()
+            rain_str = cols[15].text.strip()
+            wind_str = cols[16].text.strip()
+            wind_direction_str = cols[18].text.strip()
+            windgusts_str = cols[24].text.strip()
+
+            latest["wind"] = extract_kmh(wind_str) * 0.54
+            latest["gusts"] = extract_kmh(windgusts_str) * 0.54
+
+        latest["humidity"] = extract_value(humidity_str)
+        latest["air_pressure"] = extract_value(air_pressure_str)
+        latest["rain"] = extract_value(rain_str)
+        latest["wind_direction"] = extract_value(wind_direction_str)
+
+    elif station == "lindau-lsc":
+        soup = BeautifulSoup(response.text, "html.parser")
+        content = soup.get_text()
+        data_pattern = re.compile(r"(\w+)\s*(-?\d+(\.\d+)?)")
+        matches = data_pattern.findall(content)
+        data_dict = {match[0]: float(match[1]) for match in matches}
+
+        latest["date"] = datetime.datetime.fromtimestamp(data_dict.get("wxtime")).date()
+        latest["temperature"] = data_dict.get("t2m")
+        latest["humidity"] = data_dict.get("relhum")
+        latest["air_pressure"] = data_dict.get("press")
+        latest["rain"] = data_dict.get("rainrate")
+        latest["wind"] = data_dict.get("windspeed") * 1.943844
+        latest["wind_direction"] = data_dict.get("winddir")
+        latest["gusts"] = data_dict.get("windgust") * 1.943844
 
     elif station == "rohrspitz-zamg":
         res = response.json()
@@ -133,17 +141,14 @@ def crawl_data(station):
         ts = res["timestamps"][0]
         data = res["features"][0]["properties"]["parameters"]
 
-        latest = {
-            "interval": 600,
-            "date": datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M%z").date(),
-            "temperature": data["TL"]["data"][0],
-            "humidity": data["RFAM"]["data"][0],
-            "air_pressure": data["P"]["data"][0],
-            "rain": data["RR"]["data"][0],
-            "wind": data["FFAM"]["data"][0] * 1.943844,
-            "wind_direction": data["DD"]["data"][0],
-            "gusts": data["FFX"]["data"][0] * 1.943844,
-        }
+        latest["date"] = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M%z").date()
+        latest["temperature"] = data["TL"]["data"][0]
+        latest["humidity"] = data["RFAM"]["data"][0]
+        latest["air_pressure"] = data["P"]["data"][0]
+        latest["rain"] = data["RR"]["data"][0]
+        latest["wind"] = data["FFAM"]["data"][0] * 1.943844
+        latest["wind_direction"] = data["DD"]["data"][0]
+        latest["gusts"] = data["FFX"]["data"][0] * 1.943844
 
     return latest
 
@@ -158,6 +163,10 @@ def main(argv):
 
     # crawl data based on the station parameter passed
     station = args.station
+    if station is None:
+        print(f"No station specified. start windguru.py with --station <station_name>")
+        return
+
     latest = crawl_data(station)
 
     # windguru upload api: https://stations.windguru.cz/upload_api.php
