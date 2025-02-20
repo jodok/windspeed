@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import hashlib
+import json
 import os
 import re
 import requests
@@ -47,6 +48,11 @@ stations = {
         "url": "https://www.wetter-kressbronn.de/wetter/aktuell.htm",
         "interval": 120,
         "password": os.getenv("WINDSPEED_PASS_KRESSBRONN"),
+    },
+    "praia-da-rainha": {
+        "url": "https://api.ipma.pt/open-data/observation/meteorology/stations/observations.json",
+        "interval": 300,
+        "password": os.getenv("WINDSPEED_PASS_PRAIA_DA_RAINHA"),
     },
 }
 
@@ -194,6 +200,92 @@ def crawl_data(station):
         latest["wind"] = float(data["wind"]) / 1.852
         latest["wind_direction"] = float(data["wind_direction"])
         latest["gusts"] = float(data["gusts"]) / 1.852
+
+    elif station == "praia-da-rainha":
+        # get stations from ipma
+        # request = requests.get("http://www.ipma.pt/pt/index.html")
+        # MATCH = re.search(r"var stations=(.*?)\;", request.text, re.DOTALL)
+        # Almada, P.Rainha
+        station_id = "1210773"
+
+        # Invocação:
+        # https://api.ipma.pt/open-data/observation/meteorology/stations/observations.json
+        # Notas: Taxa de atualização horária. (valor "-99.0" = nodata)
+        #
+        # Resultado (formato json): { "{YYYY-mm-ddThh:mi}": { "{idEstacao}": { "intensidadeVentoKM": 0.0, "temperatura": 7.7, "idDireccVento": 3, "precAcumulada": 0.0, "intensidadeVento": 0.0, "humidade": 89.0, "pressao": -99.0, "radiacao": -99.0 }, ...}
+        #
+        # YYYY-mm-ddThh:mi: data/hora da observação
+        # idEstacao: identificador da estação (consultar serviço auxiliar "Lista de identificadores das estações meteorológicas")
+        # intensidadeVentoKM: intensidade do vento registada a 10 metros de altura (km/h)
+        # temperatura: temperatura do ar registada a 1.5 metros de altura, média da hora (ºC)
+        # idDireccVento: classe do rumo do vento ao rumo predominante do vento registado a 10 metros de altura (0: sem rumo, 1 ou 9: "N", 2: "NE", 3: "E", 4: "SE", 5: "S", 6: "SW", 7: "W", 8: "NW")
+        # precAcumulada: precipitação registada a 1.5 metros de altura, valor acumulado da hora (mm)
+        # intensidadeVento: intensidade do vento registada a 10 metros de altura (m/s)
+        # humidade: humidade relativa do ar registada a 1.5 metros de altura, média da hora (%)
+        # pressao: pressão atmosférica, reduzida ao nível médio do mar (NMM), média da hora (hPa)
+        # radiacao: radiação solar (kJ/m2)
+
+        data = response.json()
+        # {
+        #   "2025-02-20T17:00": {
+        #     "1210881": {
+        #       "intensidadeVentoKM": 5.0,
+        #       "temperatura": 17.1,
+        #       "radiacao": 335.7,
+        #       "idDireccVento": 6,
+        #       "precAcumulada": 0.0,
+        #       "intensidadeVento": 1.4,
+        #       "humidade": -99.0,
+        #       "pressao": -99.0
+        #     }
+        #   }
+        # }
+
+        latest_timestamp = max(data.keys())
+        latest_data = data[latest_timestamp]
+        latest_observation = latest_data[station_id]
+
+        latest["date"] = datetime.datetime.strptime(latest_timestamp, "%Y-%m-%dT%H:%M")
+        latest["temperature"] = (
+            ""
+            if latest_observation["temperatura"] == -99.0
+            else latest_observation["temperatura"]
+        )
+        latest["humidity"] = (
+            ""
+            if latest_observation["humidade"] == -99.0
+            else latest_observation["humidade"]
+        )
+        latest["air_pressure"] = (
+            ""
+            if latest_observation["pressao"] == -99.0
+            else latest_observation["pressao"]
+        )
+        latest["rain"] = (
+            ""
+            if latest_observation["precAcumulada"] == -99.0
+            else latest_observation["precAcumulada"]
+        )
+        latest["wind"] = (
+            ""
+            if latest_observation["intensidadeVento"] == -99.0
+            else latest_observation["intensidadeVento"] * 1.94384
+        )
+        latest["gusts"] = ""
+        direction_map = {
+            0: "",  # no direction
+            1: 0,  # N
+            2: 45,  # NE
+            3: 90,  # E
+            4: 135,  # SE
+            5: 180,  # S
+            6: 225,  # SW
+            7: 270,  # W
+            8: 315,  # NW
+            9: 0,  # N
+        }
+        latest["wind_direction"] = direction_map[latest_observation["idDireccVento"]]
+        print(latest)
 
     return latest
 
