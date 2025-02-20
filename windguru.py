@@ -285,7 +285,6 @@ def crawl_data(station):
             9: 0,  # N
         }
         latest["wind_direction"] = direction_map[latest_observation["idDireccVento"]]
-        print(latest)
 
     return latest
 
