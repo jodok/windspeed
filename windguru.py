@@ -7,6 +7,7 @@ import re
 import requests
 import secrets
 import sys
+import pytz
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -93,11 +94,12 @@ def crawl_data(station):
 
         date_str = cols[0].text.strip()
         time_str = cols[1].text.strip()
+        latest["unixtime"] = int(
+            datetime.datetime.strptime(
+                date_str + " " + time_str, "%d.%m.%Y %H:%M"
+            ).timestamp()
+        )
         temperature_str = cols[2].text.strip()
-
-        latest["date"] = datetime.datetime.strptime(
-            date_str + " " + time_str, "%d.%m.%Y %H:%M"
-        ).date()
         latest["temperature"] = extract_value(temperature_str)
 
         if station == "rohrspitz":
@@ -137,7 +139,7 @@ def crawl_data(station):
         matches = data_pattern.findall(content)
         data_dict = {match[0]: float(match[1]) for match in matches}
 
-        latest["date"] = datetime.datetime.fromtimestamp(data_dict.get("wxtime")).date()
+        latest["unixtime"] = int(data_dict.get("wxtime"))
         latest["temperature"] = data_dict.get("t2m")
         latest["humidity"] = data_dict.get("relhum")
         latest["air_pressure"] = data_dict.get("press")
@@ -152,7 +154,9 @@ def crawl_data(station):
         ts = res["timestamps"][0]
         data = res["features"][0]["properties"]["parameters"]
 
-        latest["date"] = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M%z").date()
+        latest["unixtime"] = int(
+            datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M%z").timestamp()
+        )
         latest["temperature"] = data["TL"]["data"][0]
         latest["humidity"] = data["RFAM"]["data"][0]
         latest["air_pressure"] = data["P"]["data"][0]
@@ -189,10 +193,7 @@ def crawl_data(station):
                     if key == "wind":
                         data["wind_direction"] = current_data.get("wind_direction")
                     break
-
-        latest["date"] = datetime.datetime.fromtimestamp(
-            float(data["date"]) / 1000
-        ).date()
+        latest["unixtime"] = int(data["date"] / 1000)
         latest["temperature"] = float(data["temperature"])
         latest["humidity"] = float(data["humidity"])
         latest["air_pressure"] = float(data["air_pressure"])
@@ -245,31 +246,36 @@ def crawl_data(station):
         latest_data = data[latest_timestamp]
         latest_observation = latest_data[station_id]
 
-        latest["date"] = datetime.datetime.strptime(latest_timestamp, "%Y-%m-%dT%H:%M")
+        # print(latest_timestamp)
+        utc_datetime = datetime.datetime.strptime(latest_timestamp, "%Y-%m-%dT%H:%M")
+        latest["unixtime"] = int(
+            utc_datetime.replace(tzinfo=datetime.timezone.utc).timestamp()
+        )
+
         latest["temperature"] = (
-            ""
-            if latest_observation["temperatura"] == -99.0
-            else latest_observation["temperatura"]
+            latest_observation["temperatura"]
+            if not latest_observation["temperatura"] == -99.0
+            else ""
         )
         latest["humidity"] = (
-            ""
-            if latest_observation["humidade"] == -99.0
-            else latest_observation["humidade"]
+            latest_observation["humidade"]
+            if not latest_observation["humidade"] == -99.0
+            else ""
         )
         latest["air_pressure"] = (
-            ""
-            if latest_observation["pressao"] == -99.0
-            else latest_observation["pressao"]
+            latest_observation["pressao"]
+            if not latest_observation["pressao"] == -99.0
+            else ""
         )
         latest["rain"] = (
-            ""
-            if latest_observation["precAcumulada"] == -99.0
-            else latest_observation["precAcumulada"]
+            latest_observation["precAcumulada"]
+            if not latest_observation["precAcumulada"] == -99.0
+            else ""
         )
         latest["wind"] = (
-            ""
-            if latest_observation["intensidadeVento"] == -99.0
-            else latest_observation["intensidadeVento"] * 1.94384
+            latest_observation["intensidadeVento"] * 1.94384
+            if not latest_observation["intensidadeVento"] == -99.0
+            else ""
         )
         latest["gusts"] = ""
         direction_map = {
@@ -316,7 +322,8 @@ def main(argv):
     # Prepare GET parameters
     params = {
         "uid": station,
-        "interval": latest["interval"],
+        "unixtime": latest["unixtime"],
+        # "interval": latest["interval"],
         "wind_avg": latest["wind"],
         "wind_max": latest["gusts"],
         "wind_direction": latest["wind_direction"],
