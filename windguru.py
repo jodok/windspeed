@@ -8,6 +8,7 @@ import requests
 import secrets
 import sys
 import pytz
+import xml.etree.ElementTree as ET
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -30,9 +31,15 @@ stations = {
         "interval": 300,
         "password": os.getenv("WINDSPEED_PASS_ALTENRHEIN"),
     },
-    "rohrspitz": {
+    "rohrspitz-old": {
         "url": "https://www.kite-connection.at/weatherstation/aktuell.htm",
         "interval": 300,
+        "password": os.getenv("WINDSPEED_PASS_ROHRSPITZ"),
+    },
+    "rohrspitz": {
+        # "url": "https://admin.meteobridge.com/1bf5f40ad1e757d85cc41a993112a638/public/chart.cgi?chart=kiteconnection-grj-kn.chart&res=min&lang=de&start=H1&stop=D0",
+        "url": "https://admin.meteobridge.com/1bf5f40ad1e757d85cc41a993112a638/public/livedataxml.cgi",
+        "interval": 60,
         "password": os.getenv("WINDSPEED_PASS_ROHRSPITZ"),
     },
     "rohrspitz-zamg": {
@@ -84,7 +91,45 @@ def crawl_data(station):
         "interval": stations[station]["interval"],
     }
 
-    if station == "rohrspitz" or station == "kressbronn":
+    if station == "rohrspitz":
+        # returns xml
+        root = ET.fromstring(response.text)
+
+        # WIND tag: wind (m/s), gust (m/s), dir (deg), date (YYYYMMDDhhmmss)
+        wind_tag = root.find("WIND")
+        wind = float(wind_tag.attrib["wind"])
+        gusts = float(wind_tag.attrib["gust"])
+        wind_direction = float(wind_tag.attrib["dir"])
+        wind_date = wind_tag.attrib["date"]
+
+        # TH tag: temp (°C), hum (%)
+        th_tag = root.find("TH")
+        temperature = float(th_tag.attrib["temp"])
+        humidity = float(th_tag.attrib["hum"])
+
+        # THB tag: press (hPa)
+        thb_tag = root.find("THB")
+        air_pressure = float(thb_tag.attrib["press"])
+
+        # RAIN tag: rate (mm), date (YYYYMMDDhhmmss)
+        rain_tag = root.find("RAIN")
+        rain = float(rain_tag.attrib["rate"])
+
+        # Use the most recent date (from WIND tag) for unixtime
+        dt = datetime.datetime.strptime(wind_date, "%Y%m%d%H%M%S")
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+        unixtime = int(dt.timestamp())
+
+        latest["unixtime"] = unixtime
+        latest["temperature"] = temperature
+        latest["humidity"] = humidity
+        latest["air_pressure"] = air_pressure
+        latest["rain"] = rain
+        latest["wind"] = wind
+        latest["wind_direction"] = wind_direction
+        latest["gusts"] = gusts
+
+    elif station == "rohrspitz-old" or station == "kressbronn":
         soup = BeautifulSoup(response.text, "html.parser")
 
         table = soup.find("table", attrs={"border": "1"})
@@ -102,7 +147,7 @@ def crawl_data(station):
         temperature_str = cols[2].text.strip()
         latest["temperature"] = extract_value(temperature_str)
 
-        if station == "rohrspitz":
+        if station == "rohrspitz-old":
             humidity_str = cols[3].text.strip()
             air_pressure_str = cols[4].text.strip()
             rain_str = cols[5].text.strip()
@@ -342,6 +387,7 @@ def main(argv):
             f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}"
         )
         print(latest)
+    print(latest)
 
 
 if __name__ == "__main__":
