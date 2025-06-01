@@ -129,7 +129,7 @@ def crawl_data(station):
         latest["wind_direction"] = wind_direction
         latest["gusts"] = gusts
 
-    elif station == "rohrspitz-old" or station == "kressbronn":
+    elif station == "kressbronn":
         soup = BeautifulSoup(response.text, "html.parser")
 
         table = soup.find("table", attrs={"border": "1"})
@@ -147,30 +147,15 @@ def crawl_data(station):
         temperature_str = cols[2].text.strip()
         latest["temperature"] = extract_value(temperature_str)
 
-        if station == "rohrspitz-old":
-            humidity_str = cols[3].text.strip()
-            air_pressure_str = cols[4].text.strip()
-            rain_str = cols[5].text.strip()
-            wind_str = cols[6].text.strip()
-            wind_direction_str = cols[8].text.strip()
-            windgusts_str = cols[11].text.strip()
+        humidity_str = cols[8].text.strip()
+        air_pressure_str = cols[14].text.strip()
+        rain_str = cols[15].text.strip()
+        wind_str = cols[16].text.strip()
+        wind_direction_str = cols[18].text.strip()
+        windgusts_str = cols[24].text.strip()
 
-            latest["date"] = datetime.datetime.strptime(
-                date_str + " " + time_str, "%d.%m.%Y %H:%M"
-            ).date()
-            latest["wind"] = extract_kts(wind_str)
-            latest["gusts"] = extract_kts(windgusts_str)
-
-        elif station == "kressbronn":
-            humidity_str = cols[8].text.strip()
-            air_pressure_str = cols[14].text.strip()
-            rain_str = cols[15].text.strip()
-            wind_str = cols[16].text.strip()
-            wind_direction_str = cols[18].text.strip()
-            windgusts_str = cols[24].text.strip()
-
-            latest["wind"] = extract_kmh(wind_str) * 0.54
-            latest["gusts"] = extract_kmh(windgusts_str) * 0.54
+        latest["wind"] = extract_kmh(wind_str) * 0.54
+        latest["gusts"] = extract_kmh(windgusts_str) * 0.54
 
         latest["humidity"] = extract_value(humidity_str)
         latest["air_pressure"] = extract_value(air_pressure_str)
@@ -387,7 +372,6 @@ def main(argv):
             f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}"
         )
         print(latest)
-    print(latest)
 
 
 if __name__ == "__main__":
