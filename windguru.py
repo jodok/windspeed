@@ -125,9 +125,9 @@ def crawl_data(station):
         latest["humidity"] = humidity
         latest["air_pressure"] = air_pressure
         latest["rain"] = rain
-        latest["wind"] = wind
+        latest["wind"] = wind * 1.943844
         latest["wind_direction"] = wind_direction
-        latest["gusts"] = gusts
+        latest["gusts"] = gusts * 1.943844
 
     elif station == "kressbronn":
         soup = BeautifulSoup(response.text, "html.parser")
