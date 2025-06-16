@@ -9,9 +9,13 @@ import secrets
 import sys
 import pytz
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+# State file for tracking last successful updates
+STATE_FILE = "station_state.json"
 
 # ZAMG
 # DD Windrichtung der letzten 10 Minuten
@@ -30,11 +34,6 @@ stations = {
         "url": "https://www.meteoswiss.admin.ch/product/output/measured-values/stationMeta/messnetz-automatisch/stationMeta.messnetz-automatisch.ARH.en.json",
         "interval": 300,
         "password": os.getenv("WINDSPEED_PASS_ALTENRHEIN"),
-    },
-    "rohrspitz-old": {
-        "url": "https://www.kite-connection.at/weatherstation/aktuell.htm",
-        "interval": 300,
-        "password": os.getenv("WINDSPEED_PASS_ROHRSPITZ"),
     },
     "rohrspitz": {
         # "url": "https://admin.meteobridge.com/1bf5f40ad1e757d85cc41a993112a638/public/chart.cgi?chart=kiteconnection-grj-kn.chart&res=min&lang=de&start=H1&stop=D0",
@@ -81,6 +80,48 @@ def extract_kts(s):
     pattern = r"([\d,]+)\s*kts\s*\((\d+)\s*Bft\)"
     match = re.search(pattern, s)
     return float(match.group(1).replace(",", "."))
+
+
+def load_state():
+    """Load the state file containing last successful updates."""
+    if os.path.exists(STATE_FILE):
+        try:
+            with open(STATE_FILE, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            print(f"Error reading state file {STATE_FILE}", file=sys.stderr)
+            return {}
+    return {}
+
+
+def save_state(station, unixtime):
+    """Save the last successful update time for a station."""
+    state = load_state()
+    state[station] = unixtime
+    try:
+        with open(STATE_FILE, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        print(f"Error writing state file: {e}", file=sys.stderr)
+
+
+def check_stale_updates():
+    """Check for stations that haven't been updated in 24 hours."""
+    state = load_state()
+    current_time = int(datetime.datetime.now().timestamp())
+    stale_stations = []
+
+    # Check all stations, not just those in state file
+    for station in stations.keys():
+        last_update = state.get(station, 0)  # Use 0 if station has never been updated
+        if current_time - last_update > 24 * 3600:  # 24 hours in seconds
+            stale_stations.append(station)
+
+    if stale_stations:
+        stale_msg = (
+            f"CRITICAL: Stations not updated in 24 hours: {', '.join(stale_stations)}"
+        )
+        print(stale_msg, file=sys.stderr)  # This will trigger cron email
 
 
 def crawl_data(station):
@@ -333,45 +374,61 @@ def main(argv):
     parser.add_argument("--station", help="station name")
     args = parser.parse_args()
 
+    # Always check for stale updates first
+    check_stale_updates()
+
     # crawl data based on the station parameter passed
     station = args.station
     if station is None:
-        print(f"No station specified. start windguru.py with --station <station_name>")
+        print(
+            "No station specified. start windguru.py with --station <station_name>",
+            file=sys.stderr,
+        )
         return
 
-    latest = crawl_data(station)
+    try:
+        latest = crawl_data(station)
 
-    # windguru upload api: https://stations.windguru.cz/upload_api.php
+        # windguru upload api: https://stations.windguru.cz/upload_api.php
 
-    # Windguru API upload
-    # Generate salt and hash for authorization
-    salt = secrets.token_hex(8)
-    hash_object = hashlib.md5((salt + station + stations[station]["password"]).encode())
-    hash_hex = hash_object.hexdigest()
-
-    # Prepare GET parameters
-    params = {
-        "uid": station,
-        "unixtime": latest["unixtime"],
-        # "interval": latest["interval"],
-        "wind_avg": latest["wind"],
-        "wind_max": latest["gusts"],
-        "wind_direction": latest["wind_direction"],
-        "temperature": latest["temperature"],
-        "rh": latest["humidity"],
-        "mslp": latest["air_pressure"],
-        "precip_interval": latest["rain"],
-        "salt": salt,
-        "hash": hash_hex,
-    }
-    # Make the GET request to upload data
-    response = requests.get("https://www.windguru.cz/upload/api.php", params=params)
-    # Check the response
-    if (response.status_code != 200) or (response.text != "OK"):
-        print(
-            f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}"
+        # Windguru API upload
+        # Generate salt and hash for authorization
+        salt = secrets.token_hex(8)
+        hash_object = hashlib.md5(
+            (salt + station + stations[station]["password"]).encode()
         )
-        print(latest)
+        hash_hex = hash_object.hexdigest()
+
+        # Prepare GET parameters
+        params = {
+            "uid": station,
+            "unixtime": latest["unixtime"],
+            # "interval": latest["interval"],
+            "wind_avg": latest["wind"],
+            "wind_max": latest["gusts"],
+            "wind_direction": latest["wind_direction"],
+            "temperature": latest["temperature"],
+            "rh": latest["humidity"],
+            "mslp": latest["air_pressure"],
+            "precip_interval": latest["rain"],
+            "salt": salt,
+            "hash": hash_hex,
+        }
+        # Make the GET request to upload data
+        response = requests.get("https://www.windguru.cz/upload/api.php", params=params)
+        # Check the response
+        if (response.status_code != 200) or (response.text != "OK"):
+            print(
+                f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}"
+            )
+            print(f"Data that failed to upload: {latest}")
+            return
+
+        # If we got here, the update was successful
+        save_state(station, latest["unixtime"])
+
+    except Exception as e:
+        print(f"Error while updating station {station}: {e}")
 
 
 if __name__ == "__main__":
