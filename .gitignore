@@ -1,4 +1,4 @@
 .env
 .venv
 .vscode
-.station_state.json
+station_state.json
