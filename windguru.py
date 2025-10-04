@@ -384,37 +384,43 @@ def crawl_data(station):
                     wf_token = token_match.group(1)
                     break
 
-    api_response = requests.get(
-        f"https://api.weatherflow.com/wxengine/rest/spot/getSpotDetailSetByList?units_wind=kts&units_temp=C&units_distance=mi&stormprint_only=false&spot_list=602390&wf_token={wf_token}"
-    )
-    data = api_response.json()
+        api_response = requests.get(
+            f"https://api.weatherflow.com/wxengine/rest/spot/getSpotDetailSetByList?units_wind=kts&units_temp=C&units_distance=mi&stormprint_only=false&spot_list=602390&wf_token={wf_token}"
+        )
+        data = api_response.json()
 
-    # Extract data from the JSON response
-    spot = data["spots"][0]
-    station = spot["stations"][0]
-    data_values = station["data_values"][0]  # Most recent observation
+        # Extract data from the JSON response
+        spot = data["spots"][0]
+        station = spot["stations"][0]
+        data_values = station["data_values"][0]  # Most recent observation
 
-    # Map the data_values array to the data_names
-    data_names = spot["data_names"]
-    data_dict = dict(zip(data_names, data_values))
-    print(data_dict)
+        # Map the data_values array to the data_names
+        data_names = spot["data_names"]
+        data_dict = dict(zip(data_names, data_values))
+        print(data_dict)
 
-    # Extract timestamp and convert to unix time
-    timestamp_str = data_dict["utc_timestamp"]
-    dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-    dt = dt.replace(tzinfo=datetime.timezone.utc)
-    latest["unixtime"] = int(dt.timestamp())
+        # Extract timestamp and convert to unix time
+        timestamp_str = data_dict["utc_timestamp"]
+        dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+        latest["unixtime"] = int(dt.timestamp())
 
-    # Extract weather data
-    latest["wind"] = data_dict["avg"] if data_dict["avg"] is not None else ""
-    latest["gusts"] = data_dict["gust"] if data_dict["gust"] is not None else ""
-    latest["wind_direction"] = data_dict["dir"] if data_dict["dir"] is not None else ""
-    latest["temperature"] = data_dict["atemp"] if data_dict["atemp"] is not None else ""
-    latest["humidity"] = (
-        data_dict["humidity"] if data_dict["humidity"] is not None else ""
-    )
-    latest["air_pressure"] = data_dict["pres"] if data_dict["pres"] is not None else ""
-    latest["rain"] = data_dict["precip"] if data_dict["precip"] is not None else ""
+        # Extract weather data
+        latest["wind"] = data_dict["avg"] if data_dict["avg"] is not None else ""
+        latest["gusts"] = data_dict["gust"] if data_dict["gust"] is not None else ""
+        latest["wind_direction"] = (
+            data_dict["dir"] if data_dict["dir"] is not None else ""
+        )
+        latest["temperature"] = (
+            data_dict["atemp"] if data_dict["atemp"] is not None else ""
+        )
+        latest["humidity"] = (
+            data_dict["humidity"] if data_dict["humidity"] is not None else ""
+        )
+        latest["air_pressure"] = (
+            data_dict["pres"] if data_dict["pres"] is not None else ""
+        )
+        latest["rain"] = data_dict["precip"] if data_dict["precip"] is not None else ""
 
     return latest
 
@@ -439,6 +445,7 @@ def main(argv):
         )
         return
 
+    latest = None  # Initialize latest variable
     try:
         latest = crawl_data(station)
 
