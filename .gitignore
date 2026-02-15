@@ -2,3 +2,4 @@
 .venv
 .vscode
 station_state.json
+windspeed.log
