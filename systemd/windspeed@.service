@@ -1,0 +1,55 @@
+[Unit]
+# One templated unit for all seven stations: `systemctl start windspeed@rohrspitz`.
+# The per-station cadence lives in the matching windspeed@<station>.timer, which
+# is the only thing that differs between them.
+Description=Poll weather station %i and upload it to windguru.cz
+Documentation=https://github.com/jodok/windspeed
+Documentation=https://stations.windguru.cz/upload_api.php
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@@WINDSPEED_USER@@
+WorkingDirectory=@@WINDSPEED_DIR@@
+ExecStart=@@WINDSPEED_DIR@@/.venv/bin/python windguru.py --station %i
+
+# State lives outside the checkout's tree of tracked files but inside the
+# checkout, matching how it worked on the Mac. One file per station, so
+# concurrent stations never write the same path.
+Environment=WINDSPEED_STATE_DIR=@@WINDSPEED_DIR@@/state
+# The checkout is read-only below (ProtectSystem=strict), and CPython silently
+# skips an unwritable __pycache__ -- but say so rather than rely on that.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# A poll that has not finished in two minutes is wedged, not slow. This is the
+# guarantee cron could not give: kressbronn runs every two minutes, and under
+# cron a hung fetch got a SECOND process stacked on top of it every two minutes
+# thereafter. systemd will not start a new instance while this one lives, so
+# without a timeout one hang would stall that station indefinitely instead.
+TimeoutStartSec=120
+
+# Baseline hardening. ProtectSystem=strict makes the whole hierarchy read-only,
+# so the state directory is named back as writable -- nothing else needs to be.
+#
+# That directory has to EXIST for the mount namespace to be set up; install.sh
+# creates it, and re-running install.sh is the fix if it is ever removed (the
+# script cannot create it from inside this namespace, because its parent is
+# read-only by the time ExecStart runs).
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=@@WINDSPEED_DIR@@/state
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+# Deliberately NO OnFailure= mail here, and the script exits 0 on a failed poll
+# to match: upstream stations go down for hours, the next attempt is 2-15
+# minutes away, and mailing each one means ~700 messages a day for a single dead
+# station. Failures land in the journal (`journalctl -u windspeed@%i`); the
+# escalation is windspeed-stale.timer, which mails once a day if a station has
+# not uploaded successfully in 24 hours.

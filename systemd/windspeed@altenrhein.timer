@@ -1,0 +1,25 @@
+[Unit]
+# MeteoSwiss publishes 10-minute means; polling faster only re-reads the
+# same values. Six upstream requests per run -- one per measurement table.
+Description=Poll altenrhein every 10 minutes
+Documentation=https://github.com/jodok/windspeed
+
+[Timer]
+Unit=windspeed@altenrhein.service
+OnCalendar=*:0/10
+
+# Replaces the `sleep 15` that windguru.sh used to do at the top of every cron
+# run. Two reasons it is jitter rather than a fixed delay: stations publish on
+# the minute and polling in the same instant reads the previous value, and the
+# three */10 stations used to fire simultaneously -- which is what made the
+# shared station_state.json race reachable.
+RandomizedDelaySec=45
+# Default AccuracySec is 1min, which would let systemd coalesce these back on
+# top of each other and undo the jitter above.
+AccuracySec=1s
+# Fire once immediately after a boot or suspend that spanned a scheduled run,
+# rather than silently waiting for the next slot the way cron does.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
