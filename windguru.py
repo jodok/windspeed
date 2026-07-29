@@ -7,6 +7,7 @@ import re
 import requests
 import secrets
 import sys
+import tempfile
 import pytz
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -14,8 +15,16 @@ from pathlib import Path
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-# State file for tracking last successful updates
-STATE_FILE = "station_state.json"
+# One state file PER STATION, holding its last successful upload time.
+#
+# It used to be a single station_state.json that every run rewrote whole:
+# load_state() read the dict, the caller mutated one key, save_state() wrote it
+# all back. Stations sharing a cadence run concurrently -- three of them are on
+# */10 -- so two processes could interleave that read-modify-write and the
+# second would clobber the first's update with its own stale copy. Splitting the
+# file removes the race by construction rather than by locking: no two stations
+# ever touch the same path.
+STATE_DIR = Path(os.getenv("WINDSPEED_STATE_DIR", "state"))
 
 # ZAMG
 # DD Windrichtung der letzten 10 Minuten
@@ -87,46 +96,71 @@ def extract_kts(s):
     return float(match.group(1).replace(",", "."))
 
 
+def state_path(station):
+    return STATE_DIR / f"{station}.json"
+
+
 def load_state():
-    """Load the state file containing last successful updates."""
-    if os.path.exists(STATE_FILE):
+    """Last successful upload time per station, read from one file each."""
+    state = {}
+    for station in stations:
+        path = state_path(station)
         try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            print(f"Error reading state file {STATE_FILE}", file=sys.stderr)
-            return {}
-    return {}
+            with path.open() as f:
+                state[station] = json.load(f)["unixtime"]
+        except FileNotFoundError:
+            continue  # never uploaded; check_stale_updates treats it as stale
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            print(f"Error reading state file {path}: {e}", file=sys.stderr)
+    return state
 
 
 def save_state(station, unixtime):
-    """Save the last successful update time for a station."""
-    state = load_state()
-    state[station] = unixtime
+    """Record a station's last successful upload, atomically.
+
+    Written to a temp file in the same directory and moved into place, so a
+    process killed mid-write leaves the previous value rather than a truncated
+    file that the next read would report as corrupt.
+    """
     try:
-        with open(STATE_FILE, "w") as f:
-            json.dump(state, f)
-    except Exception as e:
-        print(f"Error writing state file: {e}", file=sys.stderr)
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w", dir=STATE_DIR, prefix=f".{station}.", suffix=".tmp", delete=False
+        ) as f:
+            json.dump({"unixtime": unixtime}, f)
+            tmp = f.name
+        os.replace(tmp, state_path(station))
+    except OSError as e:
+        print(f"Error writing state file for {station}: {e}", file=sys.stderr)
 
 
 def check_stale_updates():
-    """Check for stations that haven't been updated in 24 hours."""
+    """Report stations whose last successful upload is over 24 hours old.
+
+    Returns the list of stale station names. This is the freshness ALERT, and
+    it deliberately runs on its own daily schedule (windspeed-stale.timer)
+    rather than on every poll: the threshold is 24 hours, so checking it every
+    two minutes produced ~700 identical CRITICAL lines a day -- which is most
+    of what the old 35 MB windspeed.log actually contained -- and, once the
+    check gates a unit's exit status, would mail the same alert just as often.
+    """
     state = load_state()
     current_time = int(datetime.datetime.now().timestamp())
-    stale_stations = []
 
-    # Check all stations, not just those in state file
-    for station in stations.keys():
-        last_update = state.get(station, 0)  # Use 0 if station has never been updated
-        if current_time - last_update > 24 * 3600:  # 24 hours in seconds
-            stale_stations.append(station)
+    # Every configured station, not only those with a state file: a station
+    # that has NEVER uploaded is the most stale case there is, not an absent one.
+    stale_stations = [
+        station
+        for station in stations
+        if current_time - state.get(station, 0) > 24 * 3600
+    ]
 
     if stale_stations:
-        stale_msg = (
-            f"CRITICAL: Stations not updated in 24 hours: {', '.join(stale_stations)}"
+        print(
+            f"CRITICAL: Stations not updated in 24 hours: {', '.join(stale_stations)}",
+            file=sys.stderr,
         )
-        print(stale_msg, file=sys.stderr)  # This will trigger cron email
+    return stale_stations
 
 
 def crawl_data(station):
@@ -318,11 +352,31 @@ def crawl_data(station):
         #   }
         # }
 
-        latest_timestamp = max(data.keys())
-        latest_data = data[latest_timestamp]
-        latest_observation = latest_data.get(station_id)
+        # Walk the hourly buckets newest-first and take the first one that
+        # actually has an observation for THIS station.
+        #
+        # It used to be `max(data.keys())` unconditionally. IPMA publishes the
+        # current hour's bucket as soon as the hour starts, with `null` for every
+        # station that has not reported into it yet -- so whether that worked
+        # depended entirely on where in the hour the poll landed, and the miss
+        # raised "'NoneType' object is not subscriptable" rather than saying
+        # anything useful. Checked against the live feed on 2026-07-30: the
+        # newest bucket was null for this station and the one before it was fine.
+        latest_timestamp = None
+        latest_observation = None
+        for timestamp in sorted(data.keys(), reverse=True):
+            observation = data[timestamp].get(station_id)
+            if observation is not None:
+                latest_timestamp = timestamp
+                latest_observation = observation
+                break
 
-        # print(latest_timestamp)
+        if latest_observation is None:
+            raise ValueError(
+                f"IPMA has no observation for station {station_id} "
+                f"in any of its {len(data)} reported hours"
+            )
+
         utc_datetime = datetime.datetime.strptime(latest_timestamp, "%Y-%m-%dT%H:%M")
         latest["unixtime"] = int(
             utc_datetime.replace(tzinfo=datetime.timezone.utc).timestamp()
@@ -384,23 +438,39 @@ def crawl_data(station):
                     wf_token = token_match.group(1)
                     break
 
+        # Without a token the request below would send `wf_token=None` and get
+        # back something that fails much further down. Say what actually broke.
+        if wf_token is None:
+            raise ValueError("no wfToken in the iKitesurf widget HTML")
+
         api_response = requests.get(
             f"https://api.weatherflow.com/wxengine/rest/spot/getSpotDetailSetByList?units_wind=kts&units_temp=C&units_distance=mi&stormprint_only=false&spot_list=602390&wf_token={wf_token}"
         )
         data = api_response.json()
 
-        # Extract data from the JSON response
+        # Extract data from the JSON response. Named spot_station, NOT station:
+        # `station` is this function's own parameter, and rebinding it here made
+        # every reference below this line silently mean something else.
         spot = data["spots"][0]
-        station = spot["stations"][0]
-        data_values = station["data_values"][0]  # Most recent observation
+        spot_station = spot["stations"][0]
+        data_values = spot_station["data_values"][0]  # Most recent observation
 
         # Map the data_values array to the data_names
         data_names = spot["data_names"]
         data_dict = dict(zip(data_names, data_values))
-        print(data_dict)
 
-        # Extract timestamp and convert to unix time
+        # An offline station answers 200 with every field null and
+        # wind_desc "Station is down" -- the normal state for this spot for days
+        # at a time. Report that as what it is instead of letting strptime raise
+        # "argument 1 must be str, not None" three lines down, which is how it
+        # surfaced in the log for over a day.
         timestamp_str = data_dict["utc_timestamp"]
+        if timestamp_str is None:
+            raise ValueError(
+                "iKitesurf reports no observation "
+                f"({data_dict.get('wind_desc') or 'no reason given'})"
+            )
+
         dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
         dt = dt.replace(tzinfo=datetime.timezone.utc)
         latest["unixtime"] = int(dt.timestamp())
@@ -427,14 +497,23 @@ def crawl_data(station):
 
 def main(argv):
     # parse command line arguments and depending on the arguments, call the appropriate function
-    # e.g. python kressbronn.py --station rohrspitz
+    # e.g. python windguru.py --station rohrspitz
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--station", help="station name")
+    parser.add_argument(
+        "--check-stale",
+        action="store_true",
+        help="report stations with no successful upload in 24h and exit non-zero "
+        "if there are any (run daily by windspeed-stale.timer)",
+    )
     args = parser.parse_args()
 
-    # Always check for stale updates first
-    check_stale_updates()
+    # The alert path, and the ONLY path that exits non-zero. Its unit carries
+    # the OnFailure= mail drop-in, so this exit status is what turns into a
+    # message to root.
+    if args.check_stale:
+        return 1 if check_stale_updates() else 0
 
     # crawl data based on the station parameter passed
     station = args.station
@@ -443,7 +522,7 @@ def main(argv):
             "No station specified. start windguru.py with --station <station_name>",
             file=sys.stderr,
         )
-        return
+        return 2
 
     latest = None  # Initialize latest variable
     try:
@@ -479,17 +558,29 @@ def main(argv):
         # Check the response
         if (response.status_code != 200) or (response.text != "OK"):
             print(
-                f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}"
+                f"Failed to upload data. Status code: {response.status_code}, Response: {response.text}",
+                file=sys.stderr,
             )
-            print(f"Data that failed to upload: {latest}")
-            return
+            print(f"Data that failed to upload: {latest}", file=sys.stderr)
+            return 0
 
         # If we got here, the update was successful
         save_state(station, latest["unixtime"])
 
+    # A single failed poll is EXPECTED and stays exit 0, so it lands in the
+    # journal without mailing anyone: upstreams go down for hours at a time and
+    # the next run is two to fifteen minutes away. What escalates is a station
+    # still stale after 24 hours, which --check-stale reports once a day.
+    # Returning non-zero here instead would mail on every retry -- ~700 messages
+    # a day for one dead station.
     except Exception as e:
-        print(f"Error while updating station {station}: {e}, latest data was {latest}")
+        print(
+            f"Error while updating station {station}: {e}, latest data was {latest}",
+            file=sys.stderr,
+        )
+
+    return 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))
