@@ -10,9 +10,17 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+# The zone kressbronn's upstream prints its timestamps in. It publishes local
+# wall-clock with no offset and no epoch, alone among the seven stations, so
+# this cannot be inferred from the page and must not be inherited from the host
+# -- see the note at the parse site. stdlib since 3.9; no new dependency, and
+# the host resolves it from the system tzdata.
+KRESSBRONN_TZ = ZoneInfo("Europe/Berlin")
 
 # One state file PER STATION, holding its last successful upload time.
 #
@@ -218,10 +226,23 @@ def crawl_data(station):
 
         date_str = cols[0].text.strip()
         time_str = cols[1].text.strip()
+        # The page prints local wall-clock time with no offset, so the zone has
+        # to be supplied here. It used to be left implicit -- strptime returns a
+        # naive datetime and .timestamp() then reads it in the HOST's zone --
+        # which was invisibly correct for as long as the host was a Mac in
+        # Vienna, and broke the moment this moved to app-btlg-civ-01, where the
+        # fleet standard is Etc/UTC. Every reading was submitted two hours in
+        # the future and windguru rejected the lot with "ERROR (time in
+        # future?)"; kressbronn was the only station affected, because it is the
+        # only one whose upstream gives neither an offset nor an epoch.
+        #
+        # ZoneInfo rather than a fixed +02:00: the offset is +1 in winter, and a
+        # constant would be wrong for half the year and wrong by an hour across
+        # each DST switch.
         latest["unixtime"] = int(
-            datetime.datetime.strptime(
-                date_str + " " + time_str, "%d.%m.%Y %H:%M"
-            ).timestamp()
+            datetime.datetime.strptime(date_str + " " + time_str, "%d.%m.%Y %H:%M")
+            .replace(tzinfo=KRESSBRONN_TZ)
+            .timestamp()
         )
         temperature_str = cols[2].text.strip()
         latest["temperature"] = extract_value(temperature_str)
