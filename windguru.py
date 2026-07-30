@@ -1,4 +1,5 @@
 import argparse
+import atexit
 import datetime
 import hashlib
 import json
@@ -7,15 +8,27 @@ import re
 import requests
 import secrets
 import sys
-import pytz
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from filelock import FileLock, Timeout
 
 # State file for tracking last successful updates
 STATE_FILE = "station_state.json"
+
+# Lockfile, one PER STATION. Cron fires whether or not the previous run for
+# that station finished, and on a machine that sleeps it releases every missed
+# tick at once on wake -- the sibling bees workload took 27 invocations within
+# 3 seconds that way. A run that arrives while the same station is still being
+# crawled logs a warning and exits 0, so cron records no failure for it.
+#
+# Deliberately not one global lock: the stations are independent, and a slow
+# crawl of kressbronn must not make rohrspitz skip its beat.
+LOCK_FILE_TEMPLATE = os.getenv(
+    "WINDSPEED_LOCK_TEMPLATE", "/tmp/windguru-{station}.lock"
+)
 
 # ZAMG
 # DD Windrichtung der letzten 10 Minuten
@@ -433,9 +446,6 @@ def main(argv):
     parser.add_argument("--station", help="station name")
     args = parser.parse_args()
 
-    # Always check for stale updates first
-    check_stale_updates()
-
     # crawl data based on the station parameter passed
     station = args.station
     if station is None:
@@ -444,6 +454,33 @@ def main(argv):
             file=sys.stderr,
         )
         return
+
+    # Checked before it is interpolated into the lockfile path, so a typo in the
+    # crontab fails loudly here instead of quietly locking a file of its own.
+    if station not in stations:
+        print(
+            f"Unknown station '{station}'. Known stations: "
+            f"{', '.join(sorted(stations))}",
+            file=sys.stderr,
+        )
+        return
+
+    # Taken before any other work: a run that loses the race should do nothing
+    # at all, not read the state file and add its own lines to the log.
+    lock_file = LOCK_FILE_TEMPLATE.format(station=station)
+    lock = FileLock(lock_file, timeout=0)
+    try:
+        lock.acquire()
+    except Timeout:
+        print(
+            f"WARNING: another run for {station} holds {lock_file}; exiting.",
+            file=sys.stderr,
+        )
+        return 0
+    atexit.register(lock.release)
+
+    # Always check for stale updates first
+    check_stale_updates()
 
     latest = None  # Initialize latest variable
     try:
@@ -492,4 +529,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    sys.exit(main(sys.argv[1:]))

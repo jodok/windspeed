@@ -1,5 +1,4 @@
-bs4
-python-dotenv
-requests
-pytz
-lxml
+beautifulsoup4==4.15.0
+python-dotenv==1.2.2
+requests==2.34.2
+filelock==3.32.2
