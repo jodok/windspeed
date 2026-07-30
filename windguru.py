@@ -8,7 +8,6 @@ import requests
 import secrets
 import sys
 import tempfile
-import pytz
 import xml.etree.ElementTree as ET
 from pathlib import Path
 

@@ -79,7 +79,12 @@ if [ ! -x "$REPO_DIR/.venv/bin/python" ]; then
 fi
 log "Installing requirements"
 "$REPO_DIR/.venv/bin/pip" install --quiet --upgrade pip
-"$REPO_DIR/.venv/bin/pip" install --quiet --upgrade -r "$REPO_DIR/requirements.txt"
+# --only-binary :all: turns this host's "no compiler, no -dev headers" from an
+# assumption into an enforced one. Without it, a dependency that ships no wheel
+# for the host's interpreter falls back to a source build, which here fails
+# somewhere inside a C compile with an error that has nothing to do with the
+# real cause. With it, pip says plainly that no wheel is available.
+"$REPO_DIR/.venv/bin/pip" install --quiet --upgrade --only-binary :all: -r "$REPO_DIR/requirements.txt"
 
 # --- secrets ----------------------------------------------------------------
 # Every station's upload password comes from here; without it each poll fails at
