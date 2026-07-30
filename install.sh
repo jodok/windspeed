@@ -108,13 +108,21 @@ fi
 # lockfile and a run that arrives while that station is still being crawled
 # logs a warning and exits 0, so cron records no failure for it. This is what
 # keeps a sleeping host from stacking up every missed tick at once on wake.
+#
+# Only stdout is redirected, NOT stderr -- `>> $LOG_FILE` and no `2>&1`. cron
+# mails whatever a job writes to stderr, and on app-btlg-civ-01 that mail is
+# the alerting channel: btlg.yml calls common_mta load-bearing because these
+# workloads have no HTTP surface to probe. Adding `2>&1` here would send the
+# stale-station alert to a logfile nobody reads. The split is:
+#   stdout -> $LOG_FILE : routine runs, skipped beats, transient crawl errors
+#   stderr -> root mail : no/unknown station, and a station stale for 24h
 if [ "$INSTALL_CRON" = "1" ]; then
   ADDED=0
   CRONTAB="$(crontab -l 2>/dev/null || true)"
   for entry in "${SCHEDULES[@]}"; do
     schedule="${entry%%:*}"
     station="${entry#*:}"
-    line="$schedule * * * * $REPO_DIR/windguru.sh $station >> $LOG_FILE 2>&1"
+    line="$schedule * * * * $REPO_DIR/windguru.sh $station >> $LOG_FILE"
     # Trailing space is load-bearing: without it "rohrspitz" matches the
     # "rohrspitz-zamg" entry and that station never gets installed.
     if printf '%s\n' "$CRONTAB" | grep -qF "$REPO_DIR/windguru.sh $station "; then

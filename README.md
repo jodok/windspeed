@@ -51,7 +51,22 @@ schedules align: at :00 and :30 all seven fire together. On a single-core host,
 offset the cron minutes instead -- see the comment above `SCHEDULES` in
 `install.sh` for a set of offsets that leaves each station's cadence unchanged.
 
-## logs
+## logs and alerting
+
+The cron entries redirect **stdout only** (`>> windspeed.log`, deliberately no
+`2>&1`). cron mails whatever a job writes to stderr, and on app-btlg-civ-01 that
+mail is the alerting channel -- `btlg.yml` calls `common_mta` load-bearing
+because these workloads have no HTTP surface to probe. So:
+
+| stream | goes to | carries |
+| --- | --- | --- |
+| stdout | `windspeed.log` | routine runs, skipped beats, transient crawl errors |
+| stderr | mail to root | no/unknown station, a station stale for 24h |
+
+A transient crawl failure is not worth waking anyone at 02:00 -- the sources go
+down and come back. `check_stale_updates()` is the escalation: if a station has
+had no successful upload for 24 hours, that goes to stderr and therefore to
+mail. Adding `2>&1` to the cron lines would silently disable all of it.
 
 `windspeed.log` is rotated by the drop-in `install.sh` writes to
 `/etc/logrotate.d/windspeed`: daily, or sooner if it passes 10M, keeping 7
@@ -63,13 +78,13 @@ file open through `>>` for the life of each run.
 `install.sh` writes these; they are listed here for reference.
 
 ```bash
-*/2  * * * * /home/admin/sandbox/windspeed/windguru.sh kressbronn       >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/5  * * * * /home/admin/sandbox/windspeed/windguru.sh lindau-lsc       >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/5  * * * * /home/admin/sandbox/windspeed/windguru.sh rohrspitz        >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh altenrhein       >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh rohrspitz-zamg   >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh praia-bela-vista >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
-*/15 * * * * /home/admin/sandbox/windspeed/windguru.sh praia-da-rainha  >> /home/admin/sandbox/windspeed/windspeed.log 2>&1
+*/2  * * * * /home/admin/sandbox/windspeed/windguru.sh kressbronn       >> /home/admin/sandbox/windspeed/windspeed.log
+*/5  * * * * /home/admin/sandbox/windspeed/windguru.sh lindau-lsc       >> /home/admin/sandbox/windspeed/windspeed.log
+*/5  * * * * /home/admin/sandbox/windspeed/windguru.sh rohrspitz        >> /home/admin/sandbox/windspeed/windspeed.log
+*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh altenrhein       >> /home/admin/sandbox/windspeed/windspeed.log
+*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh rohrspitz-zamg   >> /home/admin/sandbox/windspeed/windspeed.log
+*/10 * * * * /home/admin/sandbox/windspeed/windguru.sh praia-bela-vista >> /home/admin/sandbox/windspeed/windspeed.log
+*/15 * * * * /home/admin/sandbox/windspeed/windguru.sh praia-da-rainha  >> /home/admin/sandbox/windspeed/windspeed.log
 ```
 
 ## manual virtual environment

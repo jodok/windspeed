@@ -467,15 +467,19 @@ def main(argv):
 
     # Taken before any other work: a run that loses the race should do nothing
     # at all, not read the state file and add its own lines to the log.
+    #
+    # The warning goes to stdout, NOT stderr, and that is deliberate. On
+    # app-btlg-civ-01 stderr is the alerting channel -- cron mails it to root
+    # via common_mta, which btlg.yml calls load-bearing precisely because these
+    # workloads have no HTTP surface to probe. A skipped beat is routine, so it
+    # belongs in the log; only check_stale_updates() should be able to wake
+    # someone up.
     lock_file = LOCK_FILE_TEMPLATE.format(station=station)
     lock = FileLock(lock_file, timeout=0)
     try:
         lock.acquire()
     except Timeout:
-        print(
-            f"WARNING: another run for {station} holds {lock_file}; exiting.",
-            file=sys.stderr,
-        )
+        print(f"WARNING: another run for {station} holds {lock_file}; exiting.")
         return 0
     atexit.register(lock.release)
 
