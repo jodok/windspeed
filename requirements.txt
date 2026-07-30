@@ -1,5 +1,12 @@
-bs4
-python-dotenv
-requests
-pytz
-lxml
+# Pinned, and every pin is a pure-python wheel (py3-none-any) on purpose:
+# app-btlg-civ-01 deliberately carries no compiler and no -dev headers, so a
+# dependency that has to build from source cannot be installed there at all.
+# install.sh passes --only-binary :all: so that constraint fails loudly at
+# install time instead of on some future `pip install` that finds no wheel.
+#
+# Checked for the host's interpreter (3.14) before pinning. Verify the same
+# before adding or bumping anything here:
+#   pip download --only-binary :all: --python-version 314 --no-deps <pkg>==<ver>
+beautifulsoup4==4.15.0
+python-dotenv==1.2.2
+requests==2.34.2
