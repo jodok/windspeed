@@ -1,5 +1,8 @@
 .env
 .venv
+__pycache__/
 .vscode
+state/
 station_state.json
+station_state.json.migrated
 windspeed.log

@@ -1,0 +1,36 @@
+[Unit]
+# The freshness ALERT, and the only windspeed unit that is allowed to fail.
+#
+# `--check-stale` exits non-zero when any station's last successful upload is
+# over 24 hours old, which trips the OnFailure below and mails root once. On the
+# Mac this check ran at the top of EVERY poll instead, printing a CRITICAL line
+# that cron turned into mail -- roughly 700 times a day per dead station, and
+# the bulk of what filled the old 35 MB windspeed.log. A 24-hour threshold only
+# needs a daily question.
+Description=Alert on weather stations with no successful upload in 24h
+Documentation=https://github.com/jodok/windspeed
+After=network-online.target
+Wants=network-online.target
+OnFailure=windspeed-mail@%n.service
+
+[Service]
+Type=oneshot
+User=@@WINDSPEED_USER@@
+WorkingDirectory=@@WINDSPEED_DIR@@
+ExecStart=@@WINDSPEED_DIR@@/.venv/bin/python windguru.py --check-stale
+
+Environment=WINDSPEED_STATE_DIR=@@WINDSPEED_DIR@@/state
+Environment=PYTHONDONTWRITEBYTECODE=1
+TimeoutStartSec=60
+
+# Read-only: this unit only reads the state files, it never writes one, so it
+# gets no ReadWritePaths at all.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true

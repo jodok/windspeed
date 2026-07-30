@@ -1,0 +1,17 @@
+[Unit]
+Description=Daily weather-station freshness check
+Documentation=https://github.com/jodok/windspeed
+
+[Timer]
+Unit=windspeed-stale.service
+# Morning local time, so a station that died overnight is mailed about before
+# the day's wind matters. RandomizedDelaySec keeps it off the exact minute that
+# every other daily job on the fleet picks.
+OnCalendar=*-*-* 08:00:00
+RandomizedDelaySec=15m
+# A machine that was off at 08:00 still gets asked the question once it is back;
+# 24-hour staleness does not stop being true for having been missed.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
