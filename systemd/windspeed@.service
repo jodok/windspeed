@@ -48,8 +48,8 @@ RestrictRealtime=true
 LockPersonality=true
 
 # Deliberately NO OnFailure= mail here, and the script exits 0 on a failed poll
-# to match: upstream stations go down for hours, the next attempt is 2-15
-# minutes away, and mailing each one means ~700 messages a day for a single dead
-# station. Failures land in the journal (`journalctl -u windspeed@%i`); the
-# escalation is windspeed-stale.timer, which mails once a day if a station has
-# not uploaded successfully in 24 hours.
+# to match: upstream stations go down for hours, and the next attempt is 2-15
+# minutes away. Failures land in the journal (`journalctl -u windspeed@%i`).
+# windspeed-health.service exposes the age of the last successful upload;
+# Namche's blackbox monitoring escalates after 24 hours and owns reminders and
+# recovery notifications without leaving an expected systemd failure behind.
