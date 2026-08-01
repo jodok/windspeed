@@ -1,15 +1,19 @@
 import argparse
 import datetime
 import hashlib
+import http.server
 import json
 import os
 import re
 import requests
 import secrets
+import socketserver
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from bs4 import BeautifulSoup
@@ -32,6 +36,7 @@ KRESSBRONN_TZ = ZoneInfo("Europe/Berlin")
 # file removes the race by construction rather than by locking: no two stations
 # ever touch the same path.
 STATE_DIR = Path(os.getenv("WINDSPEED_STATE_DIR", "state"))
+STALE_AFTER_SECONDS = 24 * 3600
 
 # ZAMG
 # DD Windrichtung der letzten 10 Minuten
@@ -114,10 +119,10 @@ def load_state():
         path = state_path(station)
         try:
             with path.open() as f:
-                state[station] = json.load(f)["unixtime"]
+                state[station] = int(json.load(f)["unixtime"])
         except FileNotFoundError:
             continue  # never uploaded; check_stale_updates treats it as stale
-        except (json.JSONDecodeError, KeyError, OSError) as e:
+        except (json.JSONDecodeError, KeyError, OSError, TypeError, ValueError) as e:
             print(f"Error reading state file {path}: {e}", file=sys.stderr)
     return state
 
@@ -141,33 +146,125 @@ def save_state(station, unixtime):
         print(f"Error writing state file for {station}: {e}", file=sys.stderr)
 
 
+def station_health(station, state=None, current_time=None):
+    """Return the externally visible freshness state for one station."""
+    if station not in stations:
+        raise KeyError(station)
+
+    state = load_state() if state is None else state
+    current_time = int(time.time()) if current_time is None else current_time
+    last_update = state.get(station)
+
+    if last_update is None:
+        return {
+            "station": station,
+            "healthy": False,
+            "reason": "no successful upload recorded",
+            "last_update": None,
+            "age_seconds": None,
+            "stale_after_seconds": STALE_AFTER_SECONDS,
+        }
+
+    age = max(0, current_time - last_update)
+    healthy = age <= STALE_AFTER_SECONDS
+    return {
+        "station": station,
+        "healthy": healthy,
+        "reason": "fresh" if healthy else "last successful upload is stale",
+        "last_update": last_update,
+        "age_seconds": age,
+        "stale_after_seconds": STALE_AFTER_SECONDS,
+    }
+
+
+def stale_stations(state=None, current_time=None):
+    """Return configured stations with no successful upload in 24 hours."""
+    state = load_state() if state is None else state
+    current_time = int(time.time()) if current_time is None else current_time
+    return [
+        station
+        for station in stations
+        if not station_health(station, state, current_time)["healthy"]
+    ]
+
+
 def check_stale_updates():
     """Report stations whose last successful upload is over 24 hours old.
 
-    Returns the list of stale station names. This is the freshness ALERT, and
-    it deliberately runs on its own daily schedule (windspeed-stale.timer)
-    rather than on every poll: the threshold is 24 hours, so checking it every
-    two minutes produced ~700 identical CRITICAL lines a day -- which is most
-    of what the old 35 MB windspeed.log actually contained -- and, once the
-    check gates a unit's exit status, would mail the same alert just as often.
+    Returns the list of stale station names. This is retained as a manual CLI
+    diagnostic; continuous alerting reads the same state through the private
+    health server and belongs to Namche monitoring.
     """
-    state = load_state()
-    current_time = int(datetime.datetime.now().timestamp())
-
     # Every configured station, not only those with a state file: a station
     # that has NEVER uploaded is the most stale case there is, not an absent one.
-    stale_stations = [
-        station
-        for station in stations
-        if current_time - state.get(station, 0) > 24 * 3600
-    ]
+    stale = stale_stations()
 
-    if stale_stations:
+    if stale:
         print(
-            f"CRITICAL: Stations not updated in 24 hours: {', '.join(stale_stations)}",
+            f"CRITICAL: Stations not updated in 24 hours: {', '.join(stale)}",
             file=sys.stderr,
         )
-    return stale_stations
+    return stale
+
+
+class HealthRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Serve one blackbox-friendly freshness endpoint per station."""
+
+    server_version = "windspeed-health/1"
+    # Namche's shared http_2xx blackbox module accepts HTTP/1.1 and HTTP/2.0.
+    # BaseHTTPRequestHandler otherwise answers HTTP/1.0 by default.
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        prefix = "/health/"
+        if not path.startswith(prefix) or "/" in path[len(prefix) :]:
+            self._send_json(404, {"error": "not found"})
+            return
+
+        station = path[len(prefix) :]
+        try:
+            health = station_health(station)
+        except KeyError:
+            self._send_json(404, {"error": "unknown station", "station": station})
+            return
+
+        self._send_json(200 if health["healthy"] else 503, health)
+
+    def _send_json(self, status, body):
+        encoded = (json.dumps(body, sort_keys=True) + "\n").encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    # Prometheus probes this frequently. The status belongs in Prometheus, not
+    # as one access-log line per station per scrape in the system journal.
+    def log_message(self, format, *args):
+        pass
+
+
+class ThreadingHealthServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    # http.server.ThreadingHTTPServer performs a reverse DNS lookup for its own
+    # bind address during startup. That can stall a private numeric address for
+    # tens of seconds and adds no value: these responses never use server_name.
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+def make_health_server(host, port):
+    return ThreadingHealthServer((host, port), HealthRequestHandler)
+
+
+def serve_health(host, port):
+    """Run the private HTTP surface consumed by Namche monitoring."""
+    with make_health_server(host, port) as server:
+        print(f"Serving windspeed health on {host}:{server.server_address[1]}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
 
 
 def crawl_data(station):
@@ -524,16 +621,35 @@ def main(argv):
     parser.add_argument(
         "--check-stale",
         action="store_true",
-        help="report stations with no successful upload in 24h and exit non-zero "
-        "if there are any (run daily by windspeed-stale.timer)",
+        help="report stations with no successful upload in 24h and exit non-zero",
+    )
+    parser.add_argument(
+        "--health-server",
+        action="store_true",
+        help="serve private per-station freshness endpoints for monitoring",
+    )
+    parser.add_argument(
+        "--health-host",
+        default=os.getenv("WINDSPEED_HEALTH_HOST", "0.0.0.0"),
+        help="address for --health-server (default: WINDSPEED_HEALTH_HOST or 0.0.0.0)",
+    )
+    parser.add_argument(
+        "--health-port",
+        type=int,
+        default=int(os.getenv("WINDSPEED_HEALTH_PORT", "8086")),
+        help="port for --health-server (default: WINDSPEED_HEALTH_PORT or 8086)",
     )
     args = parser.parse_args()
 
-    # The alert path, and the ONLY path that exits non-zero. Its unit carries
-    # the OnFailure= mail drop-in, so this exit status is what turns into a
-    # message to root.
+    # Manual diagnostic for operators and smoke tests. Production alerting
+    # probes --health-server instead of turning expected staleness into a
+    # failed systemd unit.
     if args.check_stale:
         return 1 if check_stale_updates() else 0
+
+    if args.health_server:
+        serve_health(args.health_host, args.health_port)
+        return 0
 
     # crawl data based on the station parameter passed
     station = args.station
@@ -588,11 +704,10 @@ def main(argv):
         save_state(station, latest["unixtime"])
 
     # A single failed poll is EXPECTED and stays exit 0, so it lands in the
-    # journal without mailing anyone: upstreams go down for hours at a time and
-    # the next run is two to fifteen minutes away. What escalates is a station
-    # still stale after 24 hours, which --check-stale reports once a day.
-    # Returning non-zero here instead would mail on every retry -- ~700 messages
-    # a day for one dead station.
+    # journal without paging anyone: upstreams go down for hours at a time and
+    # the next run is two to fifteen minutes away. windspeed-health serves the
+    # last-success age separately, so Namche monitoring escalates a station
+    # that remains stale for 24 hours without turning every retry into a page.
     except Exception as e:
         print(
             f"Error while updating station {station}: {e}, latest data was {latest}",

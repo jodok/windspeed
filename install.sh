@@ -39,18 +39,17 @@ station_timers() {
   done
 }
 
-all_timers() {
-  station_timers
-  echo windspeed-stale.timer
-}
-
 # --- uninstall ---------------------------------------------------------------
 if [ "${1:-}" = "--uninstall" ]; then
-  log "Stopping and disabling timers"
+  log "Stopping and disabling windspeed units"
   # shellcheck disable=SC2046  # deliberate word splitting over unit names
-  sudo systemctl disable --now $(all_timers) 2>/dev/null || true
+  sudo systemctl disable --now windspeed-health.service $(station_timers) 2>/dev/null || true
+  # These three existed before freshness moved into Namche monitoring.
+  sudo systemctl disable --now windspeed-stale.timer 2>/dev/null || true
+  sudo systemctl stop windspeed-stale.service 2>/dev/null || true
   log "Removing unit files"
-  for unit in $(all_timers) windspeed@.service windspeed-stale.service windspeed-mail@.service; do
+  for unit in $(station_timers) windspeed@.service windspeed-health.service \
+    windspeed-stale.timer windspeed-stale.service windspeed-mail@.service; do
     sudo rm -f "$UNIT_DIR/$unit"
   done
   sudo systemctl daemon-reload
@@ -67,11 +66,6 @@ command -v systemctl >/dev/null || die "no systemctl; this installer is for Linu
 log "Checking prerequisites"
 python3 -c 'import venv' 2>/dev/null \
   || die "python3-venv is missing (ansible installs it via common_extra_packages; 'sudo apt install python3-venv' by hand)"
-# Not fatal: the pollers work fine without mail, but the freshness alert has
-# nowhere to go, which is the one thing that would fail silently.
-[ -x /usr/sbin/sendmail ] \
-  || warn "/usr/sbin/sendmail not found -- windspeed-stale.service can run but its alert mail will be lost. On the fleet this comes from ansible's common_mta role."
-
 # --- virtualenv -------------------------------------------------------------
 if [ ! -x "$REPO_DIR/.venv/bin/python" ]; then
   log "Creating .venv"
@@ -126,22 +120,36 @@ fi
 # EnvironmentFile. Substituting at install time is what lets the same units work
 # for any user and any checkout path.
 log "Installing unit files into $UNIT_DIR (as $RUN_USER, from $REPO_DIR)"
-for unit in windspeed@.service windspeed-stale.service; do
+for unit in windspeed@.service windspeed-health.service; do
   sed -e "s|@@WINDSPEED_USER@@|$RUN_USER|g" \
     -e "s|@@WINDSPEED_DIR@@|$REPO_DIR|g" \
     "$SYSTEMD_SRC/$unit" | sudo tee "$UNIT_DIR/$unit" >/dev/null
   sudo chmod 0644 "$UNIT_DIR/$unit"
 done
-# No placeholders in these: the mailer runs as root and the timers reference
-# units by name only.
-for unit in windspeed-mail@.service $(all_timers); do
+# The timers have no placeholders and reference units by name only.
+for unit in $(station_timers); do
   sudo install -m 0644 -o root -g root "$SYSTEMD_SRC/$unit" "$UNIT_DIR/$unit"
 done
 
-log "Reloading systemd and enabling timers"
+# Upgrade from the host-local stale mailer. Expected station staleness no
+# longer leaves a failed systemd unit behind: Prometheus probes the health
+# server and Alertmanager owns notifications, reminders and recovery instead.
+log "Removing superseded local freshness-alert units"
+sudo systemctl disable --now windspeed-stale.timer 2>/dev/null || true
+sudo systemctl stop windspeed-stale.service 2>/dev/null || true
+for unit in windspeed-stale.timer windspeed-stale.service windspeed-mail@.service; do
+  sudo rm -f "$UNIT_DIR/$unit"
+done
+
+log "Reloading systemd and enabling windspeed units"
 sudo systemctl daemon-reload
 # shellcheck disable=SC2046  # deliberate word splitting over unit names
-sudo systemctl enable --now $(all_timers)
+sudo systemctl enable --now windspeed-health.service $(station_timers)
+# Unlike the oneshot pollers, the health server keeps Python code loaded. An
+# idempotent re-run after git pull therefore has to restart it, not merely leave
+# the already-active process running against the previous checkout contents.
+sudo systemctl restart windspeed-health.service
+sudo systemctl reset-failed windspeed-stale.service 2>/dev/null || true
 
 log "Done. Next runs:"
 systemctl list-timers --all 'windspeed*' --no-pager
@@ -149,6 +157,7 @@ cat <<EOF
 
   Poll one station now:   systemctl start windspeed@rohrspitz
   Watch a station's log:  journalctl -fu windspeed@rohrspitz
-  Check freshness now:    systemctl start windspeed-stale && systemctl status windspeed-stale
+  Check freshness now:    curl -i http://127.0.0.1:8086/health/rohrspitz
+  Health service:         systemctl status windspeed-health
   Remove everything:      ./install.sh --uninstall
 EOF

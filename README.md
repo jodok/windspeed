@@ -76,7 +76,8 @@ systemctl list-timers 'windspeed*'
 | Poll one station now          | `systemctl start windspeed@rohrspitz`                |
 | Follow one station's log      | `journalctl -fu windspeed@rohrspitz`                 |
 | Errors across all stations    | `journalctl -u 'windspeed@*' -p warning --since -1d` |
-| Check freshness now           | `systemctl start windspeed-stale`                    |
+| Health-server status          | `systemctl status windspeed-health`                  |
+| Check one station's freshness | `curl -i localhost:8086/health/rohrspitz`            |
 | Pause one station             | `systemctl disable --now windspeed@kressbronn.timer` |
 
 Run a station by hand, outside systemd, with `./windguru.sh <station>`.
@@ -91,26 +92,35 @@ reachable in normal operation. One file per station removes it by construction.
 
 `WINDSPEED_STATE_DIR` overrides the location; the units set it explicitly.
 
-### Alerting
+### Health and alerting
 
 The contract is that **a failed poll is not an alert and staleness is**:
 
 - A poll that fails — upstream down, parse error, refused connection — logs to
   the journal and exits 0. Upstreams are down for hours at a time and the next
   attempt is 2–15 minutes away.
-- `windspeed-stale.timer` asks once a day whether any station has gone 24 hours
-  without a successful upload. If so `windguru.py --check-stale` exits non-zero,
-  and the `OnFailure=` handler (`windspeed-mail@.service`) mails root the unit's
-  journal through the host's exim.
+- `windspeed-health.service` continuously serves one private endpoint per
+  station on port 8086. `/health/<station>` returns 200 while its last
+  successful upload is at most 24 hours old and 503 after that. The JSON body
+  includes the age and last-upload timestamp for diagnosis.
+- Namche monitoring probes those seven endpoints over the tailnet. Prometheus
+  owns the 5-minute alert delay; Alertmanager sends the initial notification,
+  daily reminders while it remains unresolved, and a recovery notification.
+  The separate SSH probe for `app-btlg-civ-01` remains the host-liveness signal.
+
+`windguru.py --check-stale` remains available as a manual command and exits
+non-zero when any station is stale. It is not run by a timer and does not drive
+production alerting.
 
 This is a change from the Mac, where `check_stale_updates()` ran at the top of
 *every* poll and cron mailed on any output at all — one dead station generated
 roughly 700 messages and log lines a day, which is most of what the old 35 MB
 `windspeed.log` contained.
 
-Mail delivery depends on the local MTA that `infra`'s `common_mta` role
-installs, with `root` aliased to a real mailbox. On a host without it the
-pollers work and the freshness alert goes nowhere.
+The health listener binds the VM's private interfaces; it has no public route.
+The probe registry lives in `NamcheAI/infra`'s `ansible/monitors.d/btlg.yml`.
+Install or upgrade this checkout before enabling a new probe there, otherwise
+the missing endpoint correctly pages as down.
 
 ## Migration from the Mac
 
@@ -134,16 +144,18 @@ hard switchover moment.
    scp ~/sandbox/windspeed/station_state.json ansible@app-btlg-civ-01.khumbu.namche.net:sandbox/windspeed/
    ```
    Re-run `./install.sh` on the VM to split it into `state/<station>.json`.
-6. **Verify** one station end to end, then the freshness check:
+6. **Verify** one station end to end, then its freshness endpoint:
    ```bash
    systemctl start windspeed@rohrspitz && journalctl -u windspeed@rohrspitz -n 20
+   curl -i localhost:8086/health/rohrspitz
    ```
 7. **Stop the Mac's crontab** once the VM has been uploading cleanly for a
    cycle. Remove the seven `windguru.sh` lines with `crontab -e`, leaving the
    unrelated `bees.sh` line in place.
-8. **Add the uptime probe.** Once the VM has enrolled, get its tailnet address
-   and add `ansible/monitors.d/btlg.yml` to `infra` so the estate watches that
-   the host answers:
+8. **Add the monitoring probes.** Once the VM has enrolled, get its tailnet
+   address and add `ansible/monitors.d/btlg.yml` to `infra`: keep one SSH probe
+   for the host and add one HTTP probe per station for workload freshness.
+   The host entry has this shape:
    ```yaml
    ---
    monitors:

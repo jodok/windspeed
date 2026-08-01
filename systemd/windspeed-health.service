@@ -1,0 +1,35 @@
+[Unit]
+Description=Serve private weather-station freshness endpoints
+Documentation=https://github.com/jodok/windspeed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@@WINDSPEED_USER@@
+WorkingDirectory=@@WINDSPEED_DIR@@
+ExecStart=@@WINDSPEED_DIR@@/.venv/bin/python windguru.py --health-server
+Restart=on-failure
+RestartSec=5
+
+Environment=WINDSPEED_STATE_DIR=@@WINDSPEED_DIR@@/state
+Environment=WINDSPEED_HEALTH_HOST=0.0.0.0
+Environment=WINDSPEED_HEALTH_PORT=8086
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+
+# The server only reads poller state and exposes it over plain HTTP on the
+# host's private networks. It does not need a writable filesystem.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
