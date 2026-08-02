@@ -639,7 +639,11 @@ def main(argv):
         default=int(os.getenv("WINDSPEED_HEALTH_PORT", "8086")),
         help="port for --health-server (default: WINDSPEED_HEALTH_PORT or 8086)",
     )
-    args = parser.parse_args()
+    # argv, not sys.argv: main() takes the arguments as a parameter and then
+    # read the process's own regardless, so it could only ever be called one
+    # way. Identical in production -- __main__ passes sys.argv[1:] -- and it is
+    # what lets a test drive a poll without rewriting the interpreter's argv.
+    args = parser.parse_args(argv)
 
     # Manual diagnostic for operators and smoke tests. Production alerting
     # probes --health-server instead of turning expected staleness into a
@@ -663,6 +667,24 @@ def main(argv):
     latest = None  # Initialize latest variable
     try:
         latest = crawl_data(station)
+
+        # Upstreams publish slower than we poll -- IPMA is hourly against a
+        # 15-minute timer, MeteoSwiss and GeoSphere 10-minutely -- so most runs
+        # read back the same observation as the run before. Re-sending it is
+        # not merely wasted: windguru answers "ERROR (data too old)" once the
+        # reading passes its age limit, which put 43 upload failures in one day
+        # in praia-da-rainha's journal for a station that was working fine.
+        # Whenever upstream stops publishing, that becomes one failure per poll
+        # for as long as the stall lasts, and it looks exactly like a station
+        # that has actually broken.
+        #
+        # The state file already records which observation was last accepted,
+        # so this compares against it and skips. Nothing about staleness
+        # changes: a skipped upload was one windguru would not have counted
+        # either, and the state keeps the timestamp of the last reading it did
+        # accept, which is what /health/<station> ages.
+        if latest["unixtime"] <= load_state().get(station, 0):
+            return 0
 
         # windguru upload api: https://stations.windguru.cz/upload_api.php
 
