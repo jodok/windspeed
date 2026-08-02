@@ -92,6 +92,13 @@ reachable in normal operation. One file per station removes it by construction.
 
 `WINDSPEED_STATE_DIR` overrides the location; the units set it explicitly.
 
+It is also what stops a reading being uploaded twice. Every station is polled
+faster than its upstream publishes — IPMA is hourly against a 15-minute timer —
+so most runs read back the observation the run before already sent, and
+windguru answers `ERROR (data too old)` once that reading ages past its limit.
+A poll whose `unixtime` is not newer than the recorded one uploads nothing and
+logs nothing.
+
 ### Health and alerting
 
 The contract is that **a failed poll is not an alert and staleness is**:
@@ -187,3 +194,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 `crawl_data()` is importable and does no uploading, which is the quickest way to
 check a parser against a live upstream after a site changes its markup.
+
+The tests cover the health endpoints and the upload path; they touch no
+network and no upstream.
+
+```bash
+.venv/bin/python -m unittest discover -s tests -t .
+```
