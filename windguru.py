@@ -107,6 +107,16 @@ def extract_kts(s):
     match = re.search(pattern, s)
     return float(match.group(1).replace(",", "."))
 
+def parse_lindau_value(raw_value):
+    value = raw_value.strip().replace("\xa0", "").replace(",", ".")
+    if not value or value.upper() in {"NO DATA", "NODATA", "N/A", "NA"}:
+        return ""
+
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
 
 def state_path(station):
     return STATE_DIR / f"{station}.json"
@@ -361,19 +371,30 @@ def crawl_data(station):
 
     elif station == "lindau-lsc":
         soup = BeautifulSoup(response.text, "html.parser")
-        content = soup.get_text()
-        data_pattern = re.compile(r"(\w+)\s*(-?\d+(\.\d+)?)")
-        matches = data_pattern.findall(content)
-        data_dict = {match[0]: float(match[1]) for match in matches}
+        data_dict = {}
+        for row in soup.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            key = cells[0].get_text(strip=True)
+            data_dict[key] = parse_lindau_value(cells[1].get_text(strip=True))
 
-        latest["unixtime"] = int(data_dict.get("wxtime"))
-        latest["temperature"] = data_dict.get("t2m")
-        latest["humidity"] = data_dict.get("relhum")
-        latest["air_pressure"] = data_dict.get("press")
-        latest["rain"] = data_dict.get("rainrate")
-        latest["wind"] = data_dict.get("windspeed") * 1.943844
-        latest["wind_direction"] = data_dict.get("winddir")
-        latest["gusts"] = data_dict.get("windgust") * 1.943844
+        if data_dict.get("wxtime") == "":
+            raise ValueError("missing lindau-lsc wxtime")
+
+        latest["unixtime"] = int(data_dict["wxtime"])
+        latest["temperature"] = data_dict.get("t2m", "")
+        latest["humidity"] = data_dict.get("relhum", "")
+        latest["air_pressure"] = data_dict.get("press", "")
+        latest["rain"] = data_dict.get("rainrate", "")
+
+        windspeed = data_dict.get("windspeed", "")
+        latest["wind"] = windspeed * 1.943844 if windspeed != "" else ""
+
+        latest["wind_direction"] = data_dict.get("winddir", "")
+
+        windgust = data_dict.get("windgust", "")
+        latest["gusts"] = windgust * 1.943844 if windgust != "" else ""
 
     elif station == "rohrspitz-zamg":
         res = response.json()
