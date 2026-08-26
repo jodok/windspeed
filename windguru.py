@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # The zone kressbronn's upstream prints its timestamps in. It publishes local
-# wall-clock with no offset and no epoch, alone among the seven stations, so
+# wall-clock with no offset and no epoch, alone among the six stations, so
 # this cannot be inferred from the page and must not be inherited from the host
 # -- see the note at the parse site. stdlib since 3.9; no new dependency, and
 # the host resolves it from the system tzdata.
@@ -81,11 +81,6 @@ stations = {
         "url": "https://api.ipma.pt/open-data/observation/meteorology/stations/observations.json",
         "interval": 300,
         "password": os.getenv("WINDSPEED_PASS_PRAIA_DA_RAINHA"),
-    },
-    "praia-bela-vista": {
-        "url": "https://widgets.ikitesurf.com/widgets/web/conditions?spot_id=602390&units_wind=kts&units_temp=C&width=400&height=500&color=1E1E1E&name=Praia%20Bela%20Vista-Waves4Life&activity=Kite&app=ikitesurf",
-        "interval": 300,
-        "password": os.getenv("WINDSPEED_PASS_PRAIA_BELA_VISTA"),
     },
 }
 
@@ -559,76 +554,6 @@ def crawl_data(station):
             9: 0,  # N
         }
         latest["wind_direction"] = direction_map[latest_observation["idDireccVento"]]
-
-    elif station == "praia-bela-vista":
-        # iKitesurf widget - extract wfToken from HTML
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Find the script tag containing the wfToken
-        scripts = soup.find_all("script")
-        wf_token = None
-
-        for script in scripts:
-            if script.string and "wfToken" in script.string:
-                # Extract wfToken using regex
-                token_match = re.search(r"var wfToken = '([^']+)';", script.string)
-                if token_match:
-                    wf_token = token_match.group(1)
-                    break
-
-        # Without a token the request below would send `wf_token=None` and get
-        # back something that fails much further down. Say what actually broke.
-        if wf_token is None:
-            raise ValueError("no wfToken in the iKitesurf widget HTML")
-
-        api_response = requests.get(
-            f"https://api.weatherflow.com/wxengine/rest/spot/getSpotDetailSetByList?units_wind=kts&units_temp=C&units_distance=mi&stormprint_only=false&spot_list=602390&wf_token={wf_token}"
-        )
-        data = api_response.json()
-
-        # Extract data from the JSON response. Named spot_station, NOT station:
-        # `station` is this function's own parameter, and rebinding it here made
-        # every reference below this line silently mean something else.
-        spot = data["spots"][0]
-        spot_station = spot["stations"][0]
-        data_values = spot_station["data_values"][0]  # Most recent observation
-
-        # Map the data_values array to the data_names
-        data_names = spot["data_names"]
-        data_dict = dict(zip(data_names, data_values))
-
-        # An offline station answers 200 with every field null and
-        # wind_desc "Station is down" -- the normal state for this spot for days
-        # at a time. Report that as what it is instead of letting strptime raise
-        # "argument 1 must be str, not None" three lines down, which is how it
-        # surfaced in the log for over a day.
-        timestamp_str = data_dict["utc_timestamp"]
-        if timestamp_str is None:
-            raise ValueError(
-                "iKitesurf reports no observation "
-                f"({data_dict.get('wind_desc') or 'no reason given'})"
-            )
-
-        dt = datetime.datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-        dt = dt.replace(tzinfo=datetime.timezone.utc)
-        latest["unixtime"] = int(dt.timestamp())
-
-        # Extract weather data
-        latest["wind"] = data_dict["avg"] if data_dict["avg"] is not None else ""
-        latest["gusts"] = data_dict["gust"] if data_dict["gust"] is not None else ""
-        latest["wind_direction"] = (
-            data_dict["dir"] if data_dict["dir"] is not None else ""
-        )
-        latest["temperature"] = (
-            data_dict["atemp"] if data_dict["atemp"] is not None else ""
-        )
-        latest["humidity"] = (
-            data_dict["humidity"] if data_dict["humidity"] is not None else ""
-        )
-        latest["air_pressure"] = (
-            data_dict["pres"] if data_dict["pres"] is not None else ""
-        )
-        latest["rain"] = data_dict["precip"] if data_dict["precip"] is not None else ""
 
     return latest
 

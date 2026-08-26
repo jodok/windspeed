@@ -83,7 +83,7 @@ log "Installing requirements"
 # --- secrets ----------------------------------------------------------------
 # Every station's upload password comes from here; without it each poll fails at
 # the hash step. Deliberately NOT created or fetched by this script: it holds
-# seven secrets and belongs in 1Password (op://... -- see README.md).
+# six secrets and belongs in 1Password (op://... -- see README.md).
 if [ ! -f "$REPO_DIR/.env" ]; then
   warn ".env is missing -- every upload will fail until it exists. See README.md 'Secrets'."
 fi
@@ -129,6 +129,20 @@ done
 # The timers have no placeholders and reference units by name only.
 for unit in $(station_timers); do
   sudo install -m 0644 -o root -g root "$SYSTEMD_SRC/$unit" "$UNIT_DIR/$unit"
+done
+
+# Reconcile removals as well as additions. A retired station disappears from
+# the source timer list; leaving its previously installed timer enabled would
+# keep an unmonitored poller running forever after an otherwise successful
+# upgrade.
+for installed_timer in "$UNIT_DIR"/windspeed@*.timer; do
+  [ -e "$installed_timer" ] || continue
+  unit="$(basename "$installed_timer")"
+  if [ ! -e "$SYSTEMD_SRC/$unit" ]; then
+    log "Removing retired timer $unit"
+    sudo systemctl disable --now "$unit" 2>/dev/null || true
+    sudo rm -f "$installed_timer"
+  fi
 done
 
 # Upgrade from the host-local stale mailer. Expected station staleness no

@@ -25,11 +25,11 @@ class StationHealthTest(unittest.TestCase):
     def test_stale_stations_includes_missing_state(self):
         now = 2_000_000
         state = {station: now for station in windguru.stations}
-        del state["praia-bela-vista"]
+        del state["praia-da-rainha"]
 
         self.assertEqual(
             windguru.stale_stations(state, now),
-            ["praia-bela-vista"],
+            ["praia-da-rainha"],
         )
 
 
@@ -70,7 +70,7 @@ class HealthServerTest(unittest.TestCase):
         self.assertEqual(body["station"], "altenrhein")
 
     def test_missing_state_is_service_unavailable(self):
-        status, version, body = self.request("/health/praia-bela-vista")
+        status, version, body = self.request("/health/praia-da-rainha")
 
         self.assertEqual(status, 503)
         self.assertEqual(version, 11)

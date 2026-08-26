@@ -20,7 +20,6 @@ provisioned.
 | `rohrspitz`        | 5 min   | meteobridge `livedataxml.cgi`               |
 | `altenrhein`       | 10 min  | MeteoSwiss (6 measurement tables per run)   |
 | `rohrspitz-zamg`   | 10 min  | GeoSphere `tawes-v1-10min`                  |
-| `praia-bela-vista` | 10 min  | iKitesurf / WeatherFlow widget              |
 | `praia-da-rainha`  | 15 min  | IPMA hourly observations                    |
 
 A station's cadence lives in its timer (`systemd/windspeed@<station>.timer`) and
@@ -58,7 +57,7 @@ alone):
 ## Secrets
 
 Each station's upload password goes in a `.env` file in the checkout; see
-`.env.example` for the shape. The seven values live in 1Password, and the file
+`.env.example` for the shape. The six values live in 1Password, and the file
 is deliberately *not* created by `install.sh` — nothing in this repo should be
 able to fetch or write them.
 
@@ -110,7 +109,7 @@ The contract is that **a failed poll is not an alert and staleness is**:
   station on port 8086. `/health/<station>` returns 200 while its last
   successful upload is at most 24 hours old and 503 after that. The JSON body
   includes the age and last-upload timestamp for diagnosis.
-- Namche monitoring probes those seven endpoints over the tailnet. Prometheus
+- Namche monitoring probes those six endpoints over the tailnet. Prometheus
   owns the 5-minute alert delay; Alertmanager sends the initial notification,
   daily reminders while it remains unresolved, and a recovery notification.
   The separate SSH probe for `app-btlg-civ-01` remains the host-liveness signal.
@@ -143,7 +142,7 @@ hard switchover moment.
    ssh ansible@app-btlg-civ-01.khumbu.namche.net
    ```
 3. **Clone and install** as above. Expect a warning about the missing `.env`.
-4. **Copy the secrets** into `~/sandbox/windspeed/.env` from 1Password — seven
+4. **Copy the secrets** into `~/sandbox/windspeed/.env` from 1Password — six
    `WINDSPEED_PASS_*` values.
 5. **Carry the state over**, so the freshness check does not report every
    station stale on day one:

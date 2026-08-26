@@ -1,5 +1,5 @@
 [Unit]
-# One templated unit for all seven stations: `systemctl start windspeed@rohrspitz`.
+# One templated unit for all six stations: `systemctl start windspeed@rohrspitz`.
 # The per-station cadence lives in the matching windspeed@<station>.timer, which
 # is the only thing that differs between them.
 Description=Poll weather station %i and upload it to windguru.cz
