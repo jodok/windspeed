@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
 # The zone kressbronn's upstream prints its timestamps in. It publishes local
-# wall-clock with no offset and no epoch, alone among the six stations, so
+# wall-clock with no offset and no epoch, alone among the five stations, so
 # this cannot be inferred from the page and must not be inherited from the host
 # -- see the note at the parse site. stdlib since 3.9; no new dependency, and
 # the host resolves it from the system tzdata.
@@ -77,11 +77,7 @@ stations = {
         "interval": 120,
         "password": os.getenv("WINDSPEED_PASS_KRESSBRONN"),
     },
-    "praia-da-rainha": {
-        "url": "https://api.ipma.pt/open-data/observation/meteorology/stations/observations.json",
-        "interval": 300,
-        "password": os.getenv("WINDSPEED_PASS_PRAIA_DA_RAINHA"),
-    },
+
 }
 
 
@@ -445,116 +441,6 @@ def crawl_data(station):
         latest["wind_direction"] = float(data["wind_direction"])
         latest["gusts"] = float(data["gusts"]) / 1.852
 
-    elif station == "praia-da-rainha":
-        # get stations from ipma
-        # request = requests.get("http://www.ipma.pt/pt/index.html")
-        # MATCH = re.search(r"var stations=(.*?)\;", request.text, re.DOTALL)
-        # Almada, P.Rainha
-        station_id = "1210773"
-
-        # Invocação:
-        # https://api.ipma.pt/open-data/observation/meteorology/stations/observations.json
-        # Notas: Taxa de atualização horária. (valor "-99.0" = nodata)
-        #
-        # Resultado (formato json): { "{YYYY-mm-ddThh:mi}": { "{idEstacao}": { "intensidadeVentoKM": 0.0, "temperatura": 7.7, "idDireccVento": 3, "precAcumulada": 0.0, "intensidadeVento": 0.0, "humidade": 89.0, "pressao": -99.0, "radiacao": -99.0 }, ...}
-        #
-        # YYYY-mm-ddThh:mi: data/hora da observação
-        # idEstacao: identificador da estação (consultar serviço auxiliar "Lista de identificadores das estações meteorológicas")
-        # intensidadeVentoKM: intensidade do vento registada a 10 metros de altura (km/h)
-        # temperatura: temperatura do ar registada a 1.5 metros de altura, média da hora (ºC)
-        # idDireccVento: classe do rumo do vento ao rumo predominante do vento registado a 10 metros de altura (0: sem rumo, 1 ou 9: "N", 2: "NE", 3: "E", 4: "SE", 5: "S", 6: "SW", 7: "W", 8: "NW")
-        # precAcumulada: precipitação registada a 1.5 metros de altura, valor acumulado da hora (mm)
-        # intensidadeVento: intensidade do vento registada a 10 metros de altura (m/s)
-        # humidade: humidade relativa do ar registada a 1.5 metros de altura, média da hora (%)
-        # pressao: pressão atmosférica, reduzida ao nível médio do mar (NMM), média da hora (hPa)
-        # radiacao: radiação solar (kJ/m2)
-
-        data = response.json()
-        # {
-        #   "2025-02-20T17:00": {
-        #     "1210881": {
-        #       "intensidadeVentoKM": 5.0,
-        #       "temperatura": 17.1,
-        #       "radiacao": 335.7,
-        #       "idDireccVento": 6,
-        #       "precAcumulada": 0.0,
-        #       "intensidadeVento": 1.4,
-        #       "humidade": -99.0,
-        #       "pressao": -99.0
-        #     }
-        #   }
-        # }
-
-        # Walk the hourly buckets newest-first and take the first one that
-        # actually has an observation for THIS station.
-        #
-        # It used to be `max(data.keys())` unconditionally. IPMA publishes the
-        # current hour's bucket as soon as the hour starts, with `null` for every
-        # station that has not reported into it yet -- so whether that worked
-        # depended entirely on where in the hour the poll landed, and the miss
-        # raised "'NoneType' object is not subscriptable" rather than saying
-        # anything useful. Checked against the live feed on 2026-07-30: the
-        # newest bucket was null for this station and the one before it was fine.
-        latest_timestamp = None
-        latest_observation = None
-        for timestamp in sorted(data.keys(), reverse=True):
-            observation = data[timestamp].get(station_id)
-            if observation is not None:
-                latest_timestamp = timestamp
-                latest_observation = observation
-                break
-
-        if latest_observation is None:
-            raise ValueError(
-                f"IPMA has no observation for station {station_id} "
-                f"in any of its {len(data)} reported hours"
-            )
-
-        utc_datetime = datetime.datetime.strptime(latest_timestamp, "%Y-%m-%dT%H:%M")
-        latest["unixtime"] = int(
-            utc_datetime.replace(tzinfo=datetime.timezone.utc).timestamp()
-        )
-
-        latest["temperature"] = (
-            latest_observation["temperatura"]
-            if not latest_observation["temperatura"] == -99.0
-            else ""
-        )
-        latest["humidity"] = (
-            latest_observation["humidade"]
-            if not latest_observation["humidade"] == -99.0
-            else ""
-        )
-        latest["air_pressure"] = (
-            latest_observation["pressao"]
-            if not latest_observation["pressao"] == -99.0
-            else ""
-        )
-        latest["rain"] = (
-            latest_observation["precAcumulada"]
-            if not latest_observation["precAcumulada"] == -99.0
-            else ""
-        )
-        latest["wind"] = (
-            latest_observation["intensidadeVento"] * 1.94384
-            if not latest_observation["intensidadeVento"] == -99.0
-            else ""
-        )
-        latest["gusts"] = ""
-        direction_map = {
-            0: "",  # no direction
-            1: 0,  # N
-            2: 45,  # NE
-            3: 90,  # E
-            4: 135,  # SE
-            5: 180,  # S
-            6: 225,  # SW
-            7: 270,  # W
-            8: 315,  # NW
-            9: 0,  # N
-        }
-        latest["wind_direction"] = direction_map[latest_observation["idDireccVento"]]
-
     return latest
 
 
@@ -614,12 +500,9 @@ def main(argv):
     try:
         latest = crawl_data(station)
 
-        # Upstreams publish slower than we poll -- IPMA is hourly against a
-        # 15-minute timer, MeteoSwiss and GeoSphere 10-minutely -- so most runs
-        # read back the same observation as the run before. Re-sending it is
-        # not merely wasted: windguru answers "ERROR (data too old)" once the
-        # reading passes its age limit, which put 43 upload failures in one day
-        # in praia-da-rainha's journal for a station that was working fine.
+        # Upstreams publish slower than we poll -- MeteoSwiss and GeoSphere
+        # publish 10-minutely -- so runs can read back the same observation.
+        # Windguru rejects repeated readings once they pass its age limit.
         # Whenever upstream stops publishing, that becomes one failure per poll
         # for as long as the stall lasts, and it looks exactly like a station
         # that has actually broken.
