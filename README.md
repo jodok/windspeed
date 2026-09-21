@@ -20,7 +20,6 @@ provisioned.
 | `rohrspitz`        | 5 min   | meteobridge `livedataxml.cgi`               |
 | `altenrhein`       | 10 min  | MeteoSwiss (6 measurement tables per run)   |
 | `rohrspitz-zamg`   | 10 min  | GeoSphere `tawes-v1-10min`                  |
-| `praia-da-rainha`  | 15 min  | IPMA hourly observations                    |
 
 A station's cadence lives in its timer (`systemd/windspeed@<station>.timer`) and
 nowhere else. Adding a station means a `stations` entry in `windguru.py`, a
@@ -45,7 +44,10 @@ cd ~/sandbox/windspeed && ./install.sh
 legacy state file, then templates the units into `/etc/systemd/system` and
 enables the timers. It reads the run user and the checkout path from its own
 environment rather than taking configuration, and it is idempotent — re-run it
-after a `git pull` to pick up a changed unit or cadence.
+after a `git pull` to pick up a changed unit or cadence. Retired station timers
+are disabled and removed automatically. Remove a retired station’s probe from
+the infra monitor registry before upgrading, since its health endpoint will
+return 404.
 
 To take it all back out again (the checkout, `.venv` and `state/` are left
 alone):
@@ -57,7 +59,7 @@ alone):
 ## Secrets
 
 Each station's upload password goes in a `.env` file in the checkout; see
-`.env.example` for the shape. The six values live in 1Password, and the file
+`.env.example` for the shape. The five values live in 1Password, and the file
 is deliberately *not* created by `install.sh` — nothing in this repo should be
 able to fetch or write them.
 
@@ -92,8 +94,7 @@ reachable in normal operation. One file per station removes it by construction.
 `WINDSPEED_STATE_DIR` overrides the location; the units set it explicitly.
 
 It is also what stops a reading being uploaded twice. Every station is polled
-faster than its upstream publishes — IPMA is hourly against a 15-minute timer —
-so most runs read back the observation the run before already sent, and
+frequently enough that a run may read back an observation already sent, and
 windguru answers `ERROR (data too old)` once that reading ages past its limit.
 A poll whose `unixtime` is not newer than the recorded one uploads nothing and
 logs nothing.
@@ -104,12 +105,12 @@ The contract is that **a failed poll is not an alert and staleness is**:
 
 - A poll that fails — upstream down, parse error, refused connection — logs to
   the journal and exits 0. Upstreams are down for hours at a time and the next
-  attempt is 2–15 minutes away.
+  attempt is 2–10 minutes away.
 - `windspeed-health.service` continuously serves one private endpoint per
   station on port 8086. `/health/<station>` returns 200 while its last
   successful upload is at most 24 hours old and 503 after that. The JSON body
   includes the age and last-upload timestamp for diagnosis.
-- Namche monitoring probes those six endpoints over the tailnet. Prometheus
+- Namche monitoring probes those five endpoints over the tailnet. Prometheus
   owns the 5-minute alert delay; Alertmanager sends the initial notification,
   daily reminders while it remains unresolved, and a recovery notification.
   The separate SSH probe for `app-btlg-civ-01` remains the host-liveness signal.
@@ -142,7 +143,7 @@ hard switchover moment.
    ssh ansible@app-btlg-civ-01.khumbu.namche.net
    ```
 3. **Clone and install** as above. Expect a warning about the missing `.env`.
-4. **Copy the secrets** into `~/sandbox/windspeed/.env` from 1Password — six
+4. **Copy the secrets** into `~/sandbox/windspeed/.env` from 1Password — five
    `WINDSPEED_PASS_*` values.
 5. **Carry the state over**, so the freshness check does not report every
    station stale on day one:

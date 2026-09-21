@@ -43,14 +43,14 @@ class UploadSkipsUnchangedObservationTest(unittest.TestCase):
 
     def run_poll(self, unixtime):
         with patch.object(windguru, "crawl_data", return_value=reading(unixtime)):
-            return windguru.main(["--station", "praia-da-rainha"])
+            return windguru.main(["--station", "rohrspitz-zamg"])
 
     def test_new_observation_is_uploaded_and_recorded(self):
         self.assertEqual(self.run_poll(1_700_000_000), 0)
 
         self.assertEqual(self.upload.call_count, 1)
         self.assertEqual(
-            windguru.load_state()["praia-da-rainha"],
+            windguru.load_state()["rohrspitz-zamg"],
             1_700_000_000,
         )
 
@@ -63,7 +63,7 @@ class UploadSkipsUnchangedObservationTest(unittest.TestCase):
         self.upload.assert_not_called()
         # The recorded time is the observation windguru accepted, so the health
         # endpoint keeps ageing from it rather than from this skipped poll.
-        self.assertEqual(windguru.load_state()["praia-da-rainha"], 1_700_000_000)
+        self.assertEqual(windguru.load_state()["rohrspitz-zamg"], 1_700_000_000)
 
     def test_an_older_observation_is_not_uploaded(self):
         """Upstream serving a reading older than the last one is a rollback."""
@@ -73,7 +73,7 @@ class UploadSkipsUnchangedObservationTest(unittest.TestCase):
         self.assertEqual(self.run_poll(1_699_999_000), 0)
 
         self.upload.assert_not_called()
-        self.assertEqual(windguru.load_state()["praia-da-rainha"], 1_700_000_000)
+        self.assertEqual(windguru.load_state()["rohrspitz-zamg"], 1_700_000_000)
 
     def test_next_observation_is_uploaded(self):
         self.run_poll(1_700_000_000)
@@ -82,7 +82,7 @@ class UploadSkipsUnchangedObservationTest(unittest.TestCase):
         self.assertEqual(self.run_poll(1_700_003_600), 0)
 
         self.assertEqual(self.upload.call_count, 1)
-        self.assertEqual(windguru.load_state()["praia-da-rainha"], 1_700_003_600)
+        self.assertEqual(windguru.load_state()["rohrspitz-zamg"], 1_700_003_600)
 
     def test_a_rejected_upload_leaves_the_state_alone(self):
         """So the retry after a rejection is not itself skipped as a repeat."""
@@ -91,7 +91,7 @@ class UploadSkipsUnchangedObservationTest(unittest.TestCase):
         self.assertEqual(self.run_poll(1_700_000_000), 0)
 
         self.assertEqual(self.upload.call_count, 1)
-        self.assertNotIn("praia-da-rainha", windguru.load_state())
+        self.assertNotIn("rohrspitz-zamg", windguru.load_state())
 
 
 if __name__ == "__main__":

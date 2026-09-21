@@ -83,7 +83,7 @@ log "Installing requirements"
 # --- secrets ----------------------------------------------------------------
 # Every station's upload password comes from here; without it each poll fails at
 # the hash step. Deliberately NOT created or fetched by this script: it holds
-# six secrets and belongs in 1Password (op://... -- see README.md).
+# five secrets and belongs in 1Password (op://... -- see README.md).
 if [ ! -f "$REPO_DIR/.env" ]; then
   warn ".env is missing -- every upload will fail until it exists. See README.md 'Secrets'."
 fi
